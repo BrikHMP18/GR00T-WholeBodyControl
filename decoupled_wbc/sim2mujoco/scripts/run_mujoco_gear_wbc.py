@@ -245,7 +245,7 @@ class GearWbcController:
         def run_inference(input_tensor):
             ort_inputs = {model.get_inputs()[0].name: input_tensor.cpu().numpy()}
             ort_outs = model.run(None, ort_inputs)
-            return torch.tensor(ort_outs[0], device="cuda:0")
+            return torch.tensor(ort_outs[0], device="cuda:0" if torch.cuda.is_available() else "cpu")
 
         return run_inference
 
