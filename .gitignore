@@ -216,3 +216,13 @@ models/
 # Downloaded from HuggingFace (hf download)
 sample_data/
 sonic_release/
+
+# External fork of robosuite (cloned separately; see notes/playbook_sim_logistics.md Fase 4.3)
+external_dependencies/robosuite/
+
+# MuJoCo ad-hoc model dumps
+mjmodel.mjb
+mjmodel.xml
+
+# Accidental curl/wget artifact
+https:/
