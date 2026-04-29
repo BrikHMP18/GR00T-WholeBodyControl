@@ -23,6 +23,48 @@
 #ifndef POLICY_ENGINE_HPP
 #define POLICY_ENGINE_HPP
 
+#ifdef G1_CPU_ONNX
+
+#include "onnx_cpu_engine.hpp"
+#include "robot_parameters.hpp"
+
+class PolicyEngine {
+public:
+  bool Initialize(const std::string& model_path, bool use_fp16 = false) {
+    (void)use_fp16;
+    return engine_.Initialize(model_path, "PolicyEngine", "obs_dict", "action", G1_NUM_MOTOR);
+  }
+
+  template<typename T>
+  void SetInputData(const T* data, size_t element_count) { engine_.SetInputData(data, element_count); }
+
+  template<typename T>
+  void SetInputData(const std::vector<T>& data) { engine_.SetInputData(data); }
+
+  bool Infer() { return engine_.Run(); }
+
+  bool CaptureGraph() {
+    std::cout << "ONNX CPU backend selected; skipping policy CUDA graph capture" << std::endl;
+    return true;
+  }
+
+  size_t GetInputDimension() const { return engine_.GetInputDimension(); }
+  size_t GetActionDimension() const { return engine_.GetOutputDimension(); }
+  bool IsInitialized() const { return engine_.IsInitialized(); }
+  std::vector<std::string> GetInputTensorNames() const { return engine_.GetInputTensorNames(); }
+  std::vector<std::string> GetOutputTensorNames() const { return engine_.GetOutputTensorNames(); }
+  std::vector<float>& GetInputBuffer() { return engine_.GetInputBuffer(); }
+  std::vector<float>& GetActionBuffer() { return engine_.GetOutputBuffer(); }
+  const std::string& GetInputTensorName() const { return engine_.GetInputTensorName(); }
+  const std::string& GetOutputTensorName() const { return engine_.GetOutputTensorName(); }
+  void Destroy() { engine_.Destroy(); }
+
+private:
+  OnnxCpuSingleIoEngine engine_;
+};
+
+#else
+
 #include <memory>
 #include <string>
 #include <array>
@@ -439,5 +481,6 @@ private:
   bool graph_captured_ = false;
 };
 
+#endif // G1_CPU_ONNX
 #endif // POLICY_ENGINE_HPP
 

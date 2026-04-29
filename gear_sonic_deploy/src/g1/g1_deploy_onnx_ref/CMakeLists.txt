@@ -51,7 +51,11 @@ if(ENABLE_ASAN)
 endif()
 
 # Detect architecture and conditionally set CUDA library paths
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
+if(NOT G1_USE_TENSORRT)
+  set(CUDA_LINK_DIRS "")
+  set(CUDLA_LIBRARY "")
+  message(STATUS "ONNX CPU backend selected - CUDA link paths disabled")
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
   # Check for Thor (no DLA support)
   set(IS_THOR FALSE)
   if(DEFINED ENV{IS_THOR} AND "$ENV{IS_THOR}" STREQUAL "true")
@@ -189,12 +193,19 @@ set(EXE_LIBS
   g1_deploy_shared
   audio_thread
   unitree_sdk2 ZLIB::ZLIB
-  onnxruntime::onnxruntime TRTInference
-  CUDA::cudart
-  ${TensorRT_nvinfer_LIBRARY} ${TensorRT_nvonnxparser_LIBRARY}
-  ${CUDLA_LIBRARY}
+  onnxruntime::onnxruntime
   ${ZMQ_LIBRARY}
 )
+
+if(G1_USE_TENSORRT)
+  list(APPEND EXE_LIBS
+    TRTInference
+    CUDA::cudart
+    ${TensorRT_nvinfer_LIBRARY}
+    ${TensorRT_nvonnxparser_LIBRARY}
+    ${CUDLA_LIBRARY}
+  )
+endif()
 
 
 # build the main executable:

@@ -1,3 +1,5 @@
-add_subdirectory(TRTInference)
+if(G1_USE_TENSORRT)
+  add_subdirectory(TRTInference)
+endif()
 add_subdirectory(g1)
 add_subdirectory(audio_thread)

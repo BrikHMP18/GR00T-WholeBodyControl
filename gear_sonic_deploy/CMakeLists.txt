@@ -25,9 +25,25 @@ option(BUILD_SRCS "Build sources" ON)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
-find_package(TensorRT REQUIRED)
+find_path(G1_TENSORRT_INCLUDE_DIR NAMES NvInfer.h PATHS ${TensorRT_ROOT} ENV TensorRT_ROOT PATH_SUFFIXES include)
+if(G1_TENSORRT_INCLUDE_DIR)
+    find_package(TensorRT REQUIRED)
+    set(G1_USE_TENSORRT ON)
+else()
+    set(G1_USE_TENSORRT OFF)
+endif()
+
+if(G1_USE_TENSORRT)
+    message(STATUS "✅ Using TensorRT inference backend")
+else()
+    message(STATUS "✅ Using ONNX Runtime CPU inference backend")
+    add_compile_definitions(G1_CPU_ONNX=1)
+endif()
+
 find_package(Threads REQUIRED)
 find_package(onnxruntime REQUIRED)
+
+if(G1_USE_TENSORRT)
 # Find CUDA Toolkit with proper environment variable support
 if(DEFINED ENV{CUDAToolkit_ROOT})
     set(CUDAToolkit_ROOT $ENV{CUDAToolkit_ROOT})
@@ -221,6 +237,7 @@ else()
    - Check if CUDA is installed at /usr/local/cuda-12.6/
    - Run 'ls -la /usr/local/cuda*' to verify CUDA installation")
     endif()
+endif()
 endif()
 find_package(ZLIB REQUIRED)
 

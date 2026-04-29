@@ -32,6 +32,45 @@
 #ifndef ENCODER_HPP
 #define ENCODER_HPP
 
+#ifdef G1_CPU_ONNX
+
+#include "onnx_cpu_engine.hpp"
+
+class EncoderEngine {
+public:
+  bool Initialize(const std::string& model_path, bool use_fp16 = false) {
+    (void)use_fp16;
+    return engine_.Initialize(model_path, "EncoderEngine", "obs_dict", "encoded_tokens");
+  }
+
+  template<typename T>
+  void SetInputData(const T* data, size_t element_count) { engine_.SetInputData(data, element_count); }
+
+  template<typename T>
+  void SetInputData(const std::vector<T>& data) { engine_.SetInputData(data); }
+
+  bool Encode() { return engine_.Run(); }
+
+  bool CaptureGraph() {
+    std::cout << "ONNX CPU backend selected; skipping encoder CUDA graph capture" << std::endl;
+    return true;
+  }
+
+  size_t GetInputDimension() const { return engine_.GetInputDimension(); }
+  size_t GetTokenDimension() const { return engine_.GetOutputDimension(); }
+  bool IsInitialized() const { return engine_.IsInitialized(); }
+  const std::string& GetInputTensorName() const { return engine_.GetInputTensorName(); }
+  const std::string& GetOutputTensorName() const { return engine_.GetOutputTensorName(); }
+  std::vector<float>& GetInputBuffer() { return engine_.GetInputBuffer(); }
+  std::vector<float>& GetTokenBuffer() { return engine_.GetOutputBuffer(); }
+  void Destroy() { engine_.Destroy(); }
+
+private:
+  OnnxCpuSingleIoEngine engine_;
+};
+
+#else
+
 #include <memory>
 #include <string>
 #include <array>
@@ -410,4 +449,5 @@ private:
   bool graph_captured_ = false;
 };
 
+#endif // G1_CPU_ONNX
 #endif // ENCODER_HPP

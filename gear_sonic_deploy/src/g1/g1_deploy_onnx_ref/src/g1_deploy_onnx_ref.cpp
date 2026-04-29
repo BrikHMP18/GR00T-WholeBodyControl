@@ -46,7 +46,6 @@
  *   --policy-fp16         | Use FP16 for policy TensorRT engine
  */
 #include <cmath>
-#include <cuda_runtime_api.h>
 #include <memory>
 #include <mutex>
 #include <shared_mutex>
@@ -76,12 +75,6 @@
 #include <unitree/idl/hg/LowState_.hpp>
 #include <unitree/robot/b2/motion_switcher/motion_switcher_client.hpp>
 
-// TRTInference
-#include <TRTInference/InferenceEngine.h>
-
-// ONNX
-#include <onnxruntime_cxx_api.h>
-
 // Motion Data Reader
 #include "../include/motion_data_reader.hpp"
 
@@ -93,7 +86,9 @@
 
 // New Planner Classes
 #include "../include/localmotion_kplanner.hpp"
+#ifndef G1_CPU_ONNX
 #include "../include/localmotion_kplanner_tensorrt.hpp"
+#endif
 
 // Utility classes
 #include "../include/utils.hpp"
@@ -121,7 +116,6 @@
 
 #include "../include/output_interface/zmq_output_handler.hpp"
 
-#include <cuda_runtime.h>
 #include "../include/state_logger.hpp"
 
 // Encoder
@@ -2391,6 +2385,9 @@ class G1Deploy {
 
       // Initialize planner
       if (!planner_path.empty()) {
+#ifdef G1_CPU_ONNX
+        std::cout << "ONNX CPU backend selected; TensorRT planner disabled." << std::endl;
+#else
         PlannerConfig planner_config;
         planner_config.model_path = planner_path;
         if (planner_path.find("V0") != std::string::npos)
@@ -2411,6 +2408,7 @@ class G1Deploy {
           throw std::runtime_error("Unsupported planner version: " + planner_path);
         }
         planner_ = std::make_unique<LocalMotionPlannerTensorRT>(planner_fp16, 0, planner_config);
+#endif
       }
       
       // Initialize observation function map
