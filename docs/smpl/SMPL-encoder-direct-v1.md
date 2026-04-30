@@ -90,10 +90,10 @@ No confundir con observaciones de **estado del robot** en el `.cpp`, que se llam
 
 Esta variable **no se envía por ZMQ**. Se **calcula en C++** en `GatherMotionAnchorOrientationMutiFrame(...)` usando dos fuentes:
 
-- **Referencia/motion**: `current_motion_->BodyQuaternions(target_frame)[0]`
-  - Esto viene del ZMQ field `body_quat_w`/`body_quat` (streaming) o de `body_quat.csv` (motion pregrabada).
-- **Estado del robot**: `base_quat` desde `state_logger_->GetLatest(...)`
-  - Esto es IMU/estado actual del robot, *no viene del VR*.
+  - **Referencia/motion**: `current_motion_->BodyQuaternions(target_frame)[0]`
+    - Esto viene del ZMQ field `body_quat_w`/`body_quat` (streaming) o de `body_quat.csv` (motion pregrabada).
+  - **Estado del robot**: `base_quat` desde `state_logger_->GetLatest(...)`
+    - Esto es IMU/estado actual del robot, *no viene del VR*.
 
 Y además usa el estado de heading (`heading_state_buffer_` + `init_ref_data_root_rot_array_`) para construir `apply_delta_heading`, que se aplica a la referencia antes de hacer el diff.
 
