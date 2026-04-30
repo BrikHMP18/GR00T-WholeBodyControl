@@ -308,9 +308,13 @@ class ZMQManager : public InputInterface {
                       std::mutex& current_motion_mutex,
                       bool& report_temperature) override {
       if (!has_planner) {
-        std::cerr << "[ZMQCommandManager ERROR] Planner not available in planner mode" << std::endl;
-        operator_state.stop = true;
-        return;
+        // No TensorRT planner (CPU-ONNX build or planner disabled).
+        // Fall back to STREAMED_MOTION so the pico teleop stream can drive the robot.
+        if (active_mode_ == ManagedMode::PLANNER) {
+          std::cout << "[ZMQCommandManager] No planner available; falling back to STREAMED MOTION mode." << std::endl;
+          active_mode_ = ManagedMode::STREAMED_MOTION;
+        }
+        // Do NOT return here — continue so pose_interface_->handle_input() runs in STREAMED_MOTION mode.
       }
       // Emergency stop
       if (report_temperature_flag_) {

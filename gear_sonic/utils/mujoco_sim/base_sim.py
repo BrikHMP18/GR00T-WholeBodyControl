@@ -527,6 +527,31 @@ class DefaultEnv:
         mujoco.mj_resetData(self.mj_model, self.mj_data)
 
 
+class WBCDLogisticsPickingEnv(DefaultEnv):
+    """WBCD logistics-picking shelf environment for G1 teleop practice."""
+
+    def __init__(
+        self,
+        config: Dict[str, any],
+        onscreen: bool = False,
+        offscreen: bool = False,
+        enable_image_publish: bool = False,
+    ):
+        config = config.copy()
+        config["ROBOT_SCENE"] = (
+            "gear_sonic/data/robot_model/model_data/g1/"
+            "wbcd_logistics_picking_43dof.xml"
+        )
+        super().__init__(
+            config,
+            "wbcd_logistics_picking",
+            {},
+            onscreen,
+            offscreen,
+            enable_image_publish,
+        )
+
+
 class BaseSimulator:
     """Base simulator class that handles initialization and running of simulations"""
 
@@ -553,10 +578,12 @@ class BaseSimulator:
         # Create the environment
         if env_name == "default":
             self.sim_env = DefaultEnv(config, env_name, **kwargs)
+        elif env_name == "wbcd_logistics_picking":
+            self.sim_env = WBCDLogisticsPickingEnv(config, **kwargs)
         else:
             raise ValueError(
                 f"Invalid environment name: {env_name}. "
-                f"Only 'default' is supported in this minimal build."
+                f"Supported environments: 'default', 'wbcd_logistics_picking'."
             )
 
         try:
