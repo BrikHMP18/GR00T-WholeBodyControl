@@ -9,6 +9,7 @@ It is based on the project docs:
 - `docs/source/getting_started/download_models.md`
 - `docs/source/getting_started/vr_teleop_setup.md`
 - `docs/source/tutorials/vr_wholebody_teleop.md`
+- `docs/source/tutorials/data_collection.md`
 - `docs/source/user_guide/teleoperation.md`
 
 Official rendered docs:
@@ -17,6 +18,7 @@ Official rendered docs:
 - https://nvlabs.github.io/GR00T-WholeBodyControl/getting_started/download_models.html
 - https://nvlabs.github.io/GR00T-WholeBodyControl/getting_started/vr_teleop_setup.html
 - https://nvlabs.github.io/GR00T-WholeBodyControl/tutorials/vr_wholebody_teleop.html
+- https://nvlabs.github.io/GR00T-WholeBodyControl/tutorials/data_collection.html
 - https://nvlabs.github.io/GR00T-WholeBodyControl/user_guide/teleoperation.html
 
 ## 0. Machine Roles and Network Topology
@@ -25,11 +27,12 @@ Recommended real-robot setup from the docs:
 
 | Component | What runs there | How it connects |
 |---|---|---|
-| Laptop / host workstation | C++ deployment process and PICO teleop streamer | Ethernet to robot network, WiFi to PICO |
-| Robot onboard computer / G1 | Unitree robot services and low-level robot stack | Internal robot network and actuators |
+| Laptop / host workstation | C++ deployment process, PICO teleop streamer, data exporter, optional camera viewer | Ethernet to robot network, WiFi to PICO |
+| Robot onboard computer / G1 | Unitree robot services, low-level robot stack, and camera server for VLA data collection | Internal robot network, actuators, and physically connected cameras |
 | PICO headset | XRoboToolkit PICO app | WiFi to laptop / host workstation |
 | PICO controllers | Hand/controller tracking and button commands | Paired to PICO headset |
 | PICO motion trackers | Feet/body tracking | Paired to PICO headset, strapped to ankles |
+| Robot cameras | Ego-view OAK camera and optional wrist OAK cameras | Physically connected to robot onboard computer |
 
 Important connection details:
 
@@ -39,15 +42,30 @@ Important connection details:
 - Host to robot: Unitree robot network, normally via Ethernet. The host should
   have an interface on the robot network, typically `192.168.123.x`.
 - Robot onboard computer to robot hardware: handled by the robot's own Unitree
-  stack. In the standard offboard workflow, you do not run the PICO streamer on
-  the robot computer.
+  stack.
+- Robot camera server to host: same robot network. The camera server runs on
+  the robot computer and publishes camera frames over ZMQ, default port `5555`.
+  The docs use `192.168.123.164` as the default G1 camera host IP.
+- For data collection, the host data exporter reads three sources:
+  - C++ deployment robot state on host port `5557`.
+  - PICO SMPL teleop stream on host port `5556`.
+  - Robot camera server on robot IP, port `5555`.
+- In the standard offboard workflow, you do not run the C++ deployment, PICO
+  streamer, or data exporter on the robot computer. The only extra process on
+  the robot computer for VLA data collection is the camera server.
 - The host can use two network interfaces at the same time: Ethernet for the
   robot and WiFi for the PICO.
 
-The real-robot runtime has two main terminals on the host:
+The basic real-robot teleop runtime has two main terminals on the host:
 
 1. C++ deployment in `gear_sonic_deploy/`
 2. PICO teleop streamer in the repo root
+
+For VLA data collection, add:
+
+1. Camera server on the robot computer.
+2. Data exporter on the host.
+3. Optional camera viewer on the host.
 
 There is no MuJoCo simulator terminal for real robot teleop.
 
@@ -142,15 +160,29 @@ Expected files:
 
 ```text
 gear_sonic_deploy/
-├── policy/release/
-│   ├── model_encoder.onnx
-│   ├── model_decoder.onnx
-│   └── observation_config.yaml
-└── planner/target_vel/V2/
-    └── planner_sonic.onnx
++-- policy/release/
+|   +-- model_encoder.onnx
+|   +-- model_decoder.onnx
+|   +-- observation_config.yaml
++-- planner/target_vel/V2/
+    +-- planner_sonic.onnx
 ```
 
 The deployment script expects these default paths.
+
+### 2.5 Install the Data Collection Environment on the Host
+
+This is required only if you want to record VLA demonstrations in LeRobot format
+for Isaac-GR00T post-training.
+
+Run from the repo root on the host:
+
+```bash
+bash install_scripts/install_data_collection.sh
+```
+
+This creates `.venv_data_collection` with LeRobot, PyAV, OpenCV, and the data
+exporter dependencies.
 
 ## 3. Prepare PICO and XRoboToolkit
 
@@ -250,6 +282,9 @@ This creates `.venv_teleop` with:
 - XRoboToolkit SDK
 - Unitree SDK2 Python bindings on desktop hosts
 
+If you also plan to collect VLA data, make sure `.venv_data_collection` from
+step 2.5 exists on the host.
+
 ## 5. Validate in Simulation Before Real Robot
 
 Run this on the host. This is required practice before real robot deployment.
@@ -316,6 +351,9 @@ On the robot side:
 3. Ensure the robot is standing loose but supported as recommended in the docs.
 4. Confirm the robot network is available to the host, typically on
    `192.168.123.x`.
+5. If collecting VLA data, connect the robot cameras to the robot onboard
+   computer. The supported and tested camera setup is Luxonis OAK cameras:
+   one ego/head camera and optional left/right wrist cameras.
 
 On the host:
 
@@ -340,9 +378,77 @@ pgrep -af run_sim_loop.py
 If any `run_sim_loop.py` process is still running, stop it before real robot
 teleop. Sim and real instances conflict.
 
-## 7. Run Real Robot Teleop
+### 6.1 Camera Server on the Robot Computer for VLA Data Collection
 
-Run these two terminals on the host laptop / workstation.
+Skip this subsection if you only want teleop without dataset recording.
+
+For VLA data collection, this is the missing onboard piece: the robot computer
+runs the camera server. It captures frames from the OAK cameras physically
+connected to the robot and publishes them over ZMQ to the host on port `5555`.
+
+SSH into the robot computer:
+
+```bash
+ssh <robot-user>@<robot-ip>
+```
+
+On the robot computer, clone the repo and install the camera environment:
+
+```bash
+git clone https://github.com/NVlabs/GR00T-WholeBodyControl.git
+cd GR00T-WholeBodyControl
+bash install_scripts/install_camera_server.sh
+```
+
+The script creates `.venv_camera`, installs `gear_sonic[camera]`, detects OAK
+cameras, asks which physical camera maps to ego/left-wrist/right-wrist, and can
+install the camera server as a systemd service.
+
+Recommended: answer `y` when it asks to install the systemd service. Then check:
+
+```bash
+sudo systemctl status composed_camera_server.service
+journalctl -u composed_camera_server.service -f
+```
+
+If you do not install the service, run the camera server manually on the robot:
+
+```bash
+source .venv_camera/bin/activate
+
+# Single ego-view OAK camera
+python -m gear_sonic.camera.composed_camera \
+    --ego-view-camera oak \
+    --ego-view-device-id <EGO_MXID> \
+    --port 5555
+```
+
+For ego + wrist cameras:
+
+```bash
+source .venv_camera/bin/activate
+python -m gear_sonic.camera.composed_camera \
+    --ego-view-camera oak --ego-view-device-id <EGO_MXID> \
+    --left-wrist-camera oak --left-wrist-device-id <LEFT_WRIST_MXID> \
+    --right-wrist-camera oak --right-wrist-device-id <RIGHT_WRIST_MXID> \
+    --port 5555
+```
+
+From the host, test the camera feed:
+
+```bash
+source .venv_data_collection/bin/activate
+python gear_sonic/scripts/run_camera_viewer.py \
+    --camera-host 192.168.123.164 \
+    --camera-port 5555
+```
+
+Replace `192.168.123.164` with the robot computer IP if yours is different.
+
+## 7. Run Real Robot Teleop Without Data Collection
+
+Use this path when you only want to teleoperate the robot and do not need to
+record a VLA dataset. Run these two terminals on the host laptop / workstation.
 
 ### Terminal 1: C++ Deployment for Real Robot
 
@@ -391,7 +497,135 @@ python gear_sonic/scripts/pico_manager_thread_server.py --manager --vis_vr3pt --
 Before starting, confirm that the IP configured inside PICO XRoboToolkit is the
 host WiFi IP and that status is `WORKING`.
 
-## 8. Operator Sequence on the PICO
+## 8. Run Real Robot Teleop with VLA Data Collection
+
+Use this path when you want to record demonstrations as LeRobot datasets for
+Isaac-GR00T / VLA post-training.
+
+Before running this:
+
+1. The robot camera server must be running on the robot computer.
+2. `.venv_data_collection` must exist on the host.
+3. `.venv_teleop` must exist on the host.
+4. `gear_sonic_deploy` must be built and the ONNX models must be downloaded.
+5. PICO XRoboToolkit must show `WORKING`.
+
+### Option A: All-in-One Tmux Launcher on the Host
+
+This is the recommended data collection path. It starts the C++ deployment,
+PICO teleop streamer, data exporter, and camera viewer in a tmux session on the
+host.
+
+Install tmux if needed:
+
+```bash
+sudo apt install tmux
+```
+
+Run from the repo root on the host:
+
+```bash
+python gear_sonic/scripts/launch_data_collection.py \
+    --camera-host 192.168.123.164 \
+    --task-prompt "pick up the cup"
+```
+
+For ego + wrist camera recording:
+
+```bash
+python gear_sonic/scripts/launch_data_collection.py \
+    --camera-host 192.168.123.164 \
+    --task-prompt "pick up the cup" \
+    --record-wrist-cameras
+```
+
+Replace `192.168.123.164` with the robot computer IP if different.
+
+The launcher creates a `sonic_data_collection` tmux session with panes for:
+
+- C++ deployment.
+- PICO teleop streamer.
+- Data exporter.
+- Camera viewer.
+
+The deploy pane waits for confirmation before starting robot control. Click that
+pane and press Enter only after reviewing the config and confirming the robot is
+safe.
+
+Useful tmux controls:
+
+| Action | Command |
+|---|---|
+| Switch panes | `Ctrl+b`, then arrow keys |
+| Detach while keeping processes running | `Ctrl+b`, then `d` |
+| Reattach | `tmux attach -t sonic_data_collection` |
+| Kill session | `tmux kill-session -t sonic_data_collection` |
+
+### Option B: Manual Multi-Terminal Setup on the Host
+
+Use this if you want direct control over each process.
+
+Terminal 1: C++ deployment:
+
+```bash
+cd gear_sonic_deploy
+source scripts/setup_env.sh
+./deploy.sh --input-type zmq_manager real
+```
+
+Terminal 2: PICO teleop streamer:
+
+```bash
+source .venv_teleop/bin/activate
+python gear_sonic/scripts/pico_manager_thread_server.py --manager
+```
+
+Terminal 3: data exporter:
+
+```bash
+source .venv_data_collection/bin/activate
+python gear_sonic/scripts/run_data_exporter.py \
+    --task-prompt "pick up the cup" \
+    --camera-host 192.168.123.164 \
+    --camera-port 5555
+```
+
+Terminal 4: optional camera viewer:
+
+```bash
+source .venv_data_collection/bin/activate
+python gear_sonic/scripts/run_camera_viewer.py \
+    --camera-host 192.168.123.164 \
+    --camera-port 5555
+```
+
+For wrist cameras, add `--record-wrist-cameras` to the data exporter command.
+
+### Recording Controls
+
+These controls are independent of teleop mode switching:
+
+| Input | Action |
+|---|---|
+| Left Grip + A | Toggle recording: start a new episode, or stop and save the current one |
+| Left Grip + B | Discard the current episode without saving |
+
+Keyboard equivalents for the data exporter:
+
+| Key | Action |
+|---|---|
+| `c` | Toggle recording |
+| `x` | Discard current episode |
+
+Datasets are saved under `outputs/<dataset-name>/` unless you override the
+exporter output directory. If `--dataset-name` is omitted, a timestamped dataset
+name is generated automatically.
+
+The recorded LeRobot dataset includes robot state, teleop target/action data,
+task prompt annotations, ego-view camera video, and optionally wrist camera
+videos.
+
+## 9. Operator Sequence on the PICO
 
 1. Put on the PICO headset and controllers.
 2. Confirm both foot trackers are secure and visible.
@@ -413,7 +647,7 @@ Emergency stop options:
 - PICO controllers: `A+B+X+Y`.
 - C++ deployment terminal: `O`.
 
-## 9. Useful PICO Controls
+## 10. Useful PICO Controls
 
 | Action | Button | Notes |
 |---|---|---|
@@ -427,7 +661,7 @@ Emergency stop options:
 | Next locomotion mode | `A+B` | Planner modes only. |
 | Previous locomotion mode | `X+Y` | Planner modes only. |
 
-## 10. Troubleshooting Checklist
+## 11. Troubleshooting Checklist
 
 ### PICO does not connect
 
@@ -465,7 +699,37 @@ Emergency stop options:
   - Acceptable: 10 to 30 ms.
   - Poor: greater than 30 ms.
 
-## 11. Optional: Onboard Deployment Variant
+### Data exporter receives no camera frames
+
+- Confirm the camera server is running on the robot computer:
+
+```bash
+sudo systemctl status composed_camera_server.service
+journalctl -u composed_camera_server.service -f
+```
+
+- Confirm the host can reach the robot computer IP on the robot network.
+- Confirm `--camera-host` is the robot computer IP, not the host WiFi IP.
+- Test with the camera viewer from the host:
+
+```bash
+source .venv_data_collection/bin/activate
+python gear_sonic/scripts/run_camera_viewer.py \
+    --camera-host 192.168.123.164 \
+    --camera-port 5555
+```
+
+### Data exporter records no robot state or teleop action
+
+- Confirm C++ deployment is running and publishing robot state on port `5557`.
+- Confirm PICO teleop streamer is running and publishing `pose` /
+  `manager_state` on port `5556`.
+- If using the manual setup, start C++ deployment and PICO streamer before the
+  data exporter.
+- For standard single-host setup, keep `--state-zmq-host localhost` and
+  `--sonic-zmq-host localhost`, which are the exporter defaults.
+
+## 12. Optional: Onboard Deployment Variant
 
 The recommended workflow above runs deployment and PICO streamer on the host
 laptop/workstation. If you intentionally run deployment onboard on the G1 Orin:
@@ -483,4 +747,3 @@ python gear_sonic/scripts/pico_manager_thread_server.py --manager
 
 Only use this variant if the robot computer, WiFi routing, and TensorRT setup
 are intentionally configured for onboard operation.
-
