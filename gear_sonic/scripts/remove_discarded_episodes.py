@@ -1,9 +1,10 @@
 """
 Remove discarded episodes from a LeRobot dataset and renumber remaining episodes.
 
-Reads the 'discarded_episode_indices' field from meta/info.json, physically
-deletes those episodes (parquet files and videos), and renumbers the remaining
-episodes sequentially (0, 1, 2, ...).
+Reads the 'discarded_episode_indices' field from meta/info.json, omits those
+episodes from the output copy (no parquet/videos for discarded indices),
+renumbers remaining episodes sequentially (0, 1, 2, ...), and updates
+info.json (total_episodes, total_frames, splits, total_videos, total_chunks).
 
 Usage:
 
@@ -98,13 +99,35 @@ def get_video_paths(dataset_path: Path, info: dict, episode_index: int) -> dict[
     return paths
 
 
+def episode_chunk_count(n_episodes: int, chunks_size: int) -> int:
+    """Number of chunk folders needed for episode indices 0 .. n_episodes-1."""
+    if n_episodes <= 0:
+        return 1
+    return max(1, (n_episodes - 1) // chunks_size + 1)
+
+
+def apply_info_derived_counts(info: dict, n_episodes: int, total_frames: int) -> None:
+    """Set total_episodes, total_frames, splits, total_videos, total_chunks in info.json."""
+    info["total_episodes"] = n_episodes
+    info["total_frames"] = total_frames
+
+    video_keys = get_video_keys(info)
+    info["total_videos"] = n_episodes * len(video_keys)
+
+    chunks_size = info.get("chunks_size", 1000)
+    info["total_chunks"] = episode_chunk_count(n_episodes, chunks_size)
+
+    # LeRobot: "0:N" => episode indices 0 .. N-1 (N is exclusive end)
+    info["splits"] = {"train": f"0:{n_episodes}"}
+
+
 # ---------------------------------------------------------------------------
 # Main logic
 # ---------------------------------------------------------------------------
 
 def remove_discarded_episodes(
     dataset_path: Path,
-    output_path: Path,
+    output_path: Path | None,
     dry_run: bool = False,
 ):
     """Remove discarded episodes and renumber the rest."""
@@ -137,14 +160,23 @@ def remove_discarded_episodes(
     
     print(f"Keeping {len(kept_episodes)} episodes")
     print(f"Removing {len(removed_episodes)} episodes: {sorted(removed_episodes)}")
-    
+
+    if not kept_episodes:
+        print("\nERROR: All episodes are marked discarded; nothing to export.")
+        raise SystemExit(1)
+
     if dry_run:
+        k = len(kept_episodes)
         print("\n[DRY RUN] Would perform the following actions:")
         print(f"  - Remove {len(removed_episodes)} episodes")
-        print(f"  - Renumber {len(kept_episodes)} episodes")
-        print(f"  - Write to: {output_path}")
+        print(f"  - Renumber {k} episodes (0 .. {k - 1})")
+        print(f"  - Write to: {output_path or '(set --output-path to write)'}")
         return
-    
+
+    if output_path is None:
+        print("ERROR: --output-path is required when not using --dry-run")
+        raise SystemExit(1)
+
     # Create output directory
     output_path.mkdir(parents=True, exist_ok=True)
     meta_dir = output_path / "meta"
@@ -165,9 +197,9 @@ def remove_discarded_episodes(
         # Load parquet
         old_parquet_path = get_parquet_path(dataset_path, info, old_idx)
         if not old_parquet_path.exists():
-            print(f"  WARNING: Parquet file not found: {old_parquet_path}")
-            continue
-        
+            print(f"ERROR: Parquet file not found: {old_parquet_path}")
+            raise SystemExit(1)
+
         df = pd.read_parquet(old_parquet_path)
         ep_len = len(df)
         
@@ -216,16 +248,22 @@ def remove_discarded_episodes(
         new_episodes_meta.append(new_ep_meta)
         
         total_frames += ep_len
-    
+
+    n_kept = len(new_episodes_meta)
+    if n_kept != len(kept_episodes):
+        print(
+            f"ERROR: Expected {len(kept_episodes)} episodes after processing, "
+            f"got {n_kept} (parquet loading must not skip)."
+        )
+        raise SystemExit(1)
+
     # Update info.json (remove discarded_episode_indices field)
     new_info = info.copy()
-    new_info["total_episodes"] = len(new_episodes_meta)
-    new_info["total_frames"] = total_frames
-    
-    # Remove the discarded_episode_indices field since we cleaned them
     if "discarded_episode_indices" in new_info:
         del new_info["discarded_episode_indices"]
-    
+
+    apply_info_derived_counts(new_info, n_kept, total_frames)
+
     with open(meta_dir / "info.json", "w", encoding="utf-8") as f:
         json.dump(new_info, f, indent=4)
     
