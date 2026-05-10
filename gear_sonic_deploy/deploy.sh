@@ -387,6 +387,16 @@ if [[ "$ENV_TYPE" == "sim" ]]; then
     echo ""
 fi
 
+# GR00T VLA inference uses the ZMQ interfaces. Keep ROS2 disabled by default so
+# setup_env.sh does not source a system ROS2/CycloneDDS stack unless explicitly requested.
+if [[ "$INPUT_TYPE" == "ros2" || "$OUTPUT_TYPE" == "ros2" ]]; then
+    if [[ "${HAS_ROS2:-}" != "0" ]]; then
+        export HAS_ROS2=1
+    fi
+elif [[ "${HAS_ROS2:-}" != "1" ]]; then
+    export HAS_ROS2=0
+fi
+
 # ============================================================================
 # Step 1: Check Prerequisites
 # ============================================================================

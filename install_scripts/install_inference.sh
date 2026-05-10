@@ -3,8 +3,10 @@
 # Sets up the .venv_inference venv for running VLA inference with
 # Isaac-GR00T PolicyClient against a remote or local policy server.
 #
-# Installs gear_sonic[inference] which pulls in the Isaac-GR00T library,
-# PyZMQ, msgpack, Pinocchio, and other inference dependencies.
+# Installs gear_sonic[inference], which includes the local ZMQ-compatible
+# PolicyClient fallback plus PyZMQ, msgpack, Pinocchio, and other inference
+# dependencies. The Isaac-GR00T PolicyServer still runs from the Isaac-GR00T
+# repository/environment.
 #
 # Usage:  bash install_scripts/install_inference.sh   (run from repo root)
 

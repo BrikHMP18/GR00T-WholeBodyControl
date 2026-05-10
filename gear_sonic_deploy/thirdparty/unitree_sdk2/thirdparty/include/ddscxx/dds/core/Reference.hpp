@@ -22,6 +22,7 @@
 #include <dds/core/types.hpp>
 #include <dds/core/refmacros.hpp>
 #include <dds/core/Exception.hpp>
+#include <cstddef>
 
 
 namespace dds
@@ -259,7 +260,7 @@ public:
 
 private:
     // -- disallow dynamic allocation for reference types
-    void* operator new(size_t);
+    void* operator new(std::size_t);
 
 
 

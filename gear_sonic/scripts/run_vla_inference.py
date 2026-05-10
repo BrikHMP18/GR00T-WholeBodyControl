@@ -361,8 +361,13 @@ def main(config: InferenceConfig):
 
     robot_model = instantiate_g1_robot_model(waist_location="lower_and_upper_body")
 
-    # Isaac-GR00T PolicyClient
-    from gr00t.policy.server_client import PolicyClient
+    # Isaac-GR00T PolicyClient.  Prefer the official client when the full
+    # Isaac-GR00T package is installed; fall back to a lightweight compatible
+    # ZMQ client for deployment-only environments.
+    try:
+        from gr00t.policy.server_client import PolicyClient
+    except ImportError:
+        from gear_sonic.utils.inference.policy_client import PolicyClient
 
     n1_policy = PolicyClient(host=config.host, port=config.port)
 
