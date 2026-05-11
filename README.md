@@ -31,6 +31,7 @@ This is the codebase for the **GR00T Whole-Body Control (WBC)** projects. It hos
 
 ## News
 
+- **[2026-05-07]** 🤖 **End-to-end VLA workflow on G1** — collect teleop data, fine-tune Isaac-GR00T N1.7, and deploy with SONIC whole-body control. See [Data Collection](https://nvlabs.github.io/GR00T-WholeBodyControl/tutorials/data_collection.html), [VLA Workflow](https://nvlabs.github.io/GR00T-WholeBodyControl/tutorials/vla_workflow.html), and [VLA Inference](https://nvlabs.github.io/GR00T-WholeBodyControl/tutorials/vla_inference.html).
 - **[2026-04-27]** 🧩 **MotionBricks preview** — interactive G1 demo, pretrained checkpoints (VQVAE · pose · root), synthetic training code, and motion-representation docs. See [`motionbricks/`](motionbricks/) and the [project page](https://nvlabs.github.io/motionbricks/).
 - **[2026-04-14]** 🌐 **[Live web demo](https://nvlabs.github.io/GEAR-SONIC/demo.html)** — try SONIC interactively in your browser. Features [Kimodo](https://github.com/nv-tlabs/kimodo) text-to-motion generation.
 - **[2026-04-10]** 🚀 Released **SONIC training code and checkpoint** on [HuggingFace](https://huggingface.co/nvidia/GEAR-SONIC). Train from scratch or finetune. **Additional embodiment support** and **VLA data collection pipeline**. See [Training Guide](https://nvlabs.github.io/GR00T-WholeBodyControl/user_guide/training.html).
@@ -227,11 +228,19 @@ This release includes:
 > models). Without Git LFS, you will get small pointer files instead of actual
 > data, causing silent failures. Install Git LFS first if you don't have it:
 > `sudo apt install git-lfs && git lfs install`
+>
+> MotionBricks pretrained checkpoints are skipped by default to avoid an extra
+> ~2.2 GiB download during normal monorepo setup. MotionBricks GIFs and meshes
+> still download normally. Fetch the checkpoints explicitly if you plan to run
+> the MotionBricks demo.
 
 ```bash
 git clone https://github.com/NVlabs/GR00T-WholeBodyControl.git
 cd GR00T-WholeBodyControl
 git lfs pull
+
+# Optional: fetch MotionBricks pretrained checkpoints.
+git lfs pull --include="motionbricks/out/**" --exclude=""
 
 # Verify your environment
 python check_environment.py
@@ -329,7 +338,7 @@ For questions and issues, please contact the GEAR WBC team at [gear-wbc@nvidia.c
 
 MotionBricks is a real-time generative framework that transforms interactive motion control for animation and robotics. It combines a large-scale latent backbone with intuitive "smart primitives" to deliver high-quality, zero-shot motion synthesis at 15,000 FPS — complementing the tracking-based GEAR-SONIC controllers in this repo.
 
-This preview release ships an interactive G1 demo (keyboard-driven, MuJoCo viewer), pretrained checkpoints (VQVAE · pose · root), a synthetic training pipeline, and motion-representation docs. A full release — fully embedded in the GEAR-SONIC pipeline — is targeted for approximately one month out. See [`motionbricks/README.md`](motionbricks/README.md) for setup, demo, and training instructions.
+This preview release ships an interactive G1 demo (keyboard-driven, MuJoCo viewer), pretrained checkpoints (VQVAE · pose · root), a synthetic training pipeline, and motion-representation docs. Its pretrained checkpoints are opt-in for monorepo clones; run `git lfs pull --include="motionbricks/out/**" --exclude=""` from the repo root before using the demo. A full release — fully embedded in the GEAR-SONIC pipeline — is targeted for approximately one month out. See [`motionbricks/README.md`](motionbricks/README.md) for setup, demo, and training instructions.
 
 ## Decoupled WBC
 
