@@ -1,0 +1,13 @@
+.venv/
+.uv-cache/
+__pycache__/
+*.pyc
+
+# Generated planner outputs.
+debug/
+outputs/
+outputs_test/
+result.json
+
+# Local credentials.
+.env

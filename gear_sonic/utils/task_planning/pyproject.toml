@@ -1,0 +1,12 @@
+[project]
+name = "vlm-only-shelf-planner"
+version = "0.1.0"
+description = "VLM-only task planning utilities for WBCD humanoid logistics picking."
+requires-python = ">=3.10"
+dependencies = [
+  "requests>=2.31",
+  "python-dotenv>=1.0",
+]
+
+[tool.uv]
+package = false
