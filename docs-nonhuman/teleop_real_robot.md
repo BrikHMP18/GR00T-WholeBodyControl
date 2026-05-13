@@ -616,6 +616,8 @@ Keyboard equivalents for the data exporter:
 |---|---|
 | `c` | Toggle recording |
 | `x` | Discard current episode |
+| `1`–`9` | While recording with ``--subtasks``: select subtask *N* (ZMQ keyboard, port `5580`) |
+| `[` / `]` | While recording with ``--subtasks``: previous / next subtask label |
 
 Datasets are saved under `outputs/<dataset-name>/` unless you override the
 exporter output directory. If `--dataset-name` is omitted, a timestamped dataset

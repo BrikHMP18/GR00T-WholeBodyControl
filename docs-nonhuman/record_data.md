@@ -104,6 +104,12 @@ Left Grip + A    start episode / stop and save episode
 Left Grip + B    discard current episode
 ```
 
+Optional **subtasks** (multi-phase language labels in one episode): pass
+`--subtasks "label one|label two"` to `launch_data_collection.py` or
+`run_data_exporter.py`. While recording, send ZMQ keyboard messages on port
+`5580`: digits `1`–`9` select a subtask, `[` / `]` for previous/next. PICO
+buttons do **not** change subtasks.
+
 Recommended VLA mode: `POSE`. `VR_3PT` can be recorded, but do not clean it with the default SMPL stale-frame filter.
 
 ## 6. Finish

@@ -42,6 +42,7 @@ Usage (from repo root — no venv activation needed):
 from dataclasses import dataclass
 from pathlib import Path
 import os
+import shlex
 import shutil
 import signal
 import socket
@@ -154,6 +155,9 @@ class DataCollectionLaunchConfig:
     # Data exporter options
     task_prompt: str = "demo"
     """Language task prompt for the data exporter."""
+
+    subtasks: str | None = None
+    """Pipe-separated subtask labels for the data exporter (see run_data_exporter --subtasks)."""
 
     dataset_name: str = ""
     """Dataset name for the data exporter. Leave empty to auto-generate from timestamp."""
@@ -309,6 +313,8 @@ def main(config: DataCollectionLaunchConfig):
     print("=" * 60)
     print(f"  Mode:            {'Simulation' if config.sim else 'Real Robot'}")
     print(f"  Task prompt:     {config.task_prompt}")
+    if config.subtasks:
+        print(f"  Subtasks:        {config.subtasks}")
     print(f"  Dataset name:    {config.dataset_name or '(auto)'}")
     print(f"  Deploy input:    {config.deploy_input_type}")
     if config.deploy_checkpoint:
@@ -460,6 +466,8 @@ def main(config: DataCollectionLaunchConfig):
         exporter_cmd += " --record-wrist-cameras"
     if not config.text_to_speech:
         exporter_cmd += " --no-text-to-speech"
+    if config.subtasks:
+        exporter_cmd += f" --subtasks {shlex.quote(config.subtasks)}"
 
     print("Starting data exporter (pane 1)...")
     _send_to_pane(2, exporter_cmd, wait=1.0)

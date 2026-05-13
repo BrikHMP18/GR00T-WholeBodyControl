@@ -17,6 +17,8 @@ Virtual environment setup (run from repo root):
 Usage (from repo root):
     python gear_sonic/scripts/run_data_exporter.py --task-prompt "pick up the cup"
     python gear_sonic/scripts/run_data_exporter.py --task-prompt "walk forward" --dataset-name my_session
+    python gear_sonic/scripts/run_data_exporter.py --task-prompt "tidy table" \\
+        --subtasks "push both objects out|return to start pose"
 """
 
 from collections import deque
@@ -40,7 +42,10 @@ from gear_sonic.data.features_sonic_vla import (
 )
 from gear_sonic.camera.composed_camera import ComposedCameraClientSensor
 from gear_sonic.utils.data_collection.episode_state import EpisodeState
-from gear_sonic.utils.data_collection.keyboard_subscriber import ZMQKeyboardSubscriber
+from gear_sonic.utils.data_collection.keyboard_subscriber import (
+    DEFAULT_ZMQ_KEYBOARD_PORT,
+    ZMQKeyboardSubscriber,
+)
 from gear_sonic.utils.data_collection.telemetry import Telemetry
 from gear_sonic.utils.data_collection.text_to_speech import TextToSpeech
 from gear_sonic.utils.data_collection.transforms import compute_projected_gravity, quat_to_rot6d
@@ -54,6 +59,13 @@ from gear_sonic.utils.data_collection.zmq_state_subscriber import (
 # ---------------------------------------------------------------------------
 
 
+def _parse_subtasks_arg(raw: str | None) -> list[str]:
+    """Split ``--subtasks`` pipe-separated labels into a list."""
+    if raw is None or not str(raw).strip():
+        return []
+    return [part.strip() for part in str(raw).split("|") if part.strip()]
+
+
 @dataclass
 class SonicDataExporterConfig:
     """CLI config for the ROS-free Sonic data exporter."""
@@ -64,6 +76,12 @@ class SonicDataExporterConfig:
 
     task_prompt: str = "demo"
     """Language task prompt."""
+
+    subtasks: str | None = None
+    """Pipe-separated subtask labels, e.g. ``push both objects|return to start``.
+    While **recording**, change the per-frame language annotation with ZMQ keyboard
+    keys ``1``–``9`` (select subtask 1–9) or ``[`` / ``]`` (previous / next).
+    PICO recording controls (Grip+A / Grip+B) are unchanged."""
 
     root_output_dir: str = "outputs"
     """Root output directory."""
@@ -227,6 +245,8 @@ class GrootDataCollector:
         sonic_data_zmq_port: int = 5556,
         state_zmq_host: str = "localhost",
         state_zmq_port: int = 5557,
+        subtasks: list[str] | None = None,
+        keyboard_subscriber_conflate: bool = True,
     ):
         self.text_to_speech = text_to_speech
         self.frequency = frequency
@@ -234,8 +254,13 @@ class GrootDataCollector:
         self.data_exporter = data_exporter
         self.robot_model = robot_model
 
+        self._subtasks: list[str] = list(subtasks) if subtasks else []
+        self._subtask_index: int = 0
+
         self._episode_state = EpisodeState()
-        self._keyboard_listener = ZMQKeyboardSubscriber()
+        self._keyboard_listener = ZMQKeyboardSubscriber(
+            conflate=keyboard_subscriber_conflate
+        )
 
         self._image_subscriber = ComposedCameraClientSensor(server_ip=camera_host, port=camera_port)
 
@@ -283,6 +308,11 @@ class GrootDataCollector:
         self._initial_yaw = None
 
         print(f"Recording to {self.data_exporter.meta.root}")
+        if self._subtasks:
+            print(
+                f"[Subtasks] {len(self._subtasks)} label(s) — keys 1-9 and [ ] "
+                f"while recording (ZMQ port {DEFAULT_ZMQ_KEYBOARD_PORT})"
+            )
 
     @property
     def current_episode_index(self):
@@ -305,34 +335,78 @@ class GrootDataCollector:
 
         self.latest_proprio_msg = msg
 
+    def _composed_task_for_frame(self) -> str:
+        """Per-frame language label; includes subtask segment when configured."""
+        base = self.data_exporter.task
+        if not self._subtasks:
+            return base
+        label = self._subtasks[self._subtask_index]
+        return f"{base} | ST{self._subtask_index + 1}: {label}"
+
+    def _try_handle_subtask_key(self, key: str) -> None:
+        if not self._subtasks:
+            return
+        if self._episode_state.get_state() != self._episode_state.RECORDING:
+            return
+
+        n = len(self._subtasks)
+        prev = self._subtask_index
+
+        if key in "123456789":
+            idx = int(key) - 1
+            if idx >= n:
+                print(
+                    f"[Subtasks] Ignoring '{key}': only {n} subtask(s) configured "
+                    f"(use 1-{n})"
+                )
+                return
+            self._subtask_index = idx
+        elif key == "[":
+            self._subtask_index = max(0, self._subtask_index - 1)
+        elif key == "]":
+            self._subtask_index = min(n - 1, self._subtask_index + 1)
+        else:
+            return
+
+        if self._subtask_index != prev:
+            self._print_and_say(
+                f"Subtask {self._subtask_index + 1}: {self._subtasks[self._subtask_index]}",
+                blocking=False,
+            )
+
     def _check_recording_commands(self):
         """Check keyboard + ZMQ toggle flags for recording commands."""
-        key = self._keyboard_listener.read_msg()
+        keys = self._keyboard_listener.drain_keys()
 
         if self._manager_toggle_da:
-            key = "x"
+            keys.append("x")
             self._manager_toggle_da = False
         elif self._manager_toggle_dc:
-            key = "c"
+            keys.append("c")
             self._manager_toggle_dc = False
 
-        if key == "c":
-            self._episode_state.change_state()
-            if self._episode_state.get_state() == self._episode_state.RECORDING:
-                self._initial_yaw = None
-                self._print_and_say(
-                    f"Started recording {self.current_episode_index}", blocking=False
-                )
-            elif self._episode_state.get_state() == self._episode_state.NEED_TO_SAVE:
-                self._print_and_say("Stopping recording, preparing to save", blocking=False)
-            elif self._episode_state.get_state() == self._episode_state.IDLE:
-                self._print_and_say("Saved episode and back to idle state", blocking=False)
-        elif key == "x":
-            if self._episode_state.get_state() == self._episode_state.RECORDING:
-                self.data_exporter.save_episode_as_discarded()
-                self._episode_state.reset_state()
-                self._initial_yaw = None
-                self._print_and_say("Discarded episode", blocking=False)
+        for key in keys:
+            if key == "c":
+                self._episode_state.change_state()
+                if self._episode_state.get_state() == self._episode_state.RECORDING:
+                    self._subtask_index = 0
+                    self._initial_yaw = None
+                    self._print_and_say(
+                        f"Started recording {self.current_episode_index}", blocking=False
+                    )
+                elif self._episode_state.get_state() == self._episode_state.NEED_TO_SAVE:
+                    self._print_and_say("Stopping recording, preparing to save", blocking=False)
+                elif self._episode_state.get_state() == self._episode_state.IDLE:
+                    self._print_and_say("Saved episode and back to idle state", blocking=False)
+            elif key == "x":
+                if self._episode_state.get_state() == self._episode_state.RECORDING:
+                    self.data_exporter.save_episode_as_discarded()
+                    self._episode_state.reset_state()
+                    self._subtask_index = 0
+                    self._initial_yaw = None
+                    self._print_and_say("Discarded episode", blocking=False)
+            else:
+                self._try_handle_subtask_key(key)
 
     def _poll_sonic_zmq_messages(self):
         """Poll ZMQ for pose, planner, and manager_state messages (non-blocking)."""
@@ -611,6 +685,9 @@ class GrootDataCollector:
         self._add_images_to_frame_data(frame_data)
 
         self._log_latency_periodic(sonic_latency_ms)
+
+        if self._subtasks:
+            frame_data["task"] = self._composed_task_for_frame()
 
         self.data_exporter.add_frame(frame_data)
         return self._finalize_frame(t_start)
@@ -939,6 +1016,9 @@ def main(config: SonicDataExporterConfig):
         script_config={**robot_config, "record_wrist_cameras": config.record_wrist_cameras},
     )
 
+    subtasks_list = _parse_subtasks_arg(config.subtasks)
+    keyboard_conflate = len(subtasks_list) == 0
+
     data_collector = GrootDataCollector(
         frequency=config.data_collection_frequency,
         data_exporter=data_exporter,
@@ -950,6 +1030,8 @@ def main(config: SonicDataExporterConfig):
         sonic_data_zmq_port=config.sonic_zmq_port,
         state_zmq_host=config.state_zmq_host,
         state_zmq_port=config.state_zmq_port,
+        subtasks=subtasks_list,
+        keyboard_subscriber_conflate=keyboard_conflate,
     )
     data_collector.run()
 

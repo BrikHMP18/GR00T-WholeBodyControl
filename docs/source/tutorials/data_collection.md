@@ -266,6 +266,7 @@ Common options:
 | Flag | Default | Description |
 |---|---|---|
 | `--task-prompt` | `"demo"` | Language task description (e.g., `"pick up the cup"`) |
+| `--subtasks` | *(unset)* | Pipe-separated in-episode labels; keyboard `1`–`9`, `[` / `]` while recording (see [Recording Controls](#recording-controls)) |
 | `--dataset-name` | *(auto: timestamp)* | Dataset name; omit to auto-generate |
 | `--sim / --no-sim` | `False` | Run deploy.sh in sim mode (also starts the sim loop) |
 | `--camera-host` | `localhost` | Camera server host (e.g., `192.168.123.164` for real robot) |
@@ -348,6 +349,7 @@ All options are provided via CLI flags — no interactive prompts.  Key flags:
 | Flag | Default | Description |
 |---|---|---|
 | `--task-prompt` | `"demo"` | Language task description for this session |
+| `--subtasks` | *(unset)* | Pipe-separated subtask labels; ZMQ keys `1`–`9`, `[` / `]` while recording |
 | `--dataset-name` | *(auto: timestamp)* | Dataset name.  Omit to create a new one, or pass an existing name to append episodes |
 | `--data-collection-frequency` | `50` | Recording frequency (Hz) |
 | `--root-output-dir` | `outputs` | Parent directory for saved datasets |
@@ -376,10 +378,40 @@ These buttons work in any manager mode (POSE, PLANNER, etc.) and are independent
 |---|---|
 | `c` | **Toggle** recording (same as Left Grip + A) |
 | `x` | **Discard** episode (same as Left Grip + B) |
+| `1`–`9` | **Subtask** (keyboard only): while recording, jump to subtask *N* if configured via ``--subtasks`` (see below) |
+| `[` / `]` | **Subtask** (keyboard only): previous / next label in the ``--subtasks`` list while recording |
 
 ```{note}
 Keyboard commands are sent via a separate ZMQ publisher (default port `5580`). The data exporter subscribes to this channel automatically. You can send keys from any ZMQ publisher on that port, or integrate with the C++ deployment's keyboard handler.
 ```
+
+### Multi-phase episodes (subtasks)
+
+When you pass ``--subtasks`` as **pipe-separated** labels, each recorded frame stores a composed language string:
+
+``{task_prompt} | ST{k}: {label_k}``
+
+While **recording**, send single-character messages on the keyboard ZMQ port (same as ``c`` / ``x``): digits ``1``–``9`` select subtask 1–9, and ``[`` / ``]`` move to the previous or next label. Subtask switches apply from the **next** written frame onward (at collection rate). **PICO controllers do not switch subtasks** — use the laptop keyboard (or any ZMQ publisher).
+
+Example:
+
+```bash
+python gear_sonic/scripts/run_data_exporter.py \
+    --task-prompt "Clear the bin" \
+    --subtasks "push both objects out|return to start pose" \
+    --camera-host 192.168.123.164 --camera-port 5555
+```
+
+With the tmux launcher:
+
+```bash
+python gear_sonic/scripts/launch_data_collection.py \
+    --camera-host 192.168.123.164 \
+    --task-prompt "Clear the bin" \
+    --subtasks "push both objects out|return to start pose"
+```
+
+Omit ``--subtasks`` for the previous behaviour: a single task string for the whole episode.
 
 ---
 
@@ -423,6 +455,7 @@ Key options:
 | Flag | Default | Description |
 |---|---|---|
 | `--task-prompt` | `"demo"` | Language task description for annotation |
+| `--subtasks` | *(unset)* | Pipe-separated subtask labels; keyboard `1`–`9` / `[` / `]` while recording |
 | `--dataset-name` | *(auto: timestamp)* | Dataset name; omit to auto-generate, or reuse an existing name to append |
 | `--data-collection-frequency` | `50` | Recording frequency in Hz |
 | `--camera-host` | `localhost` | Camera server hostname |
