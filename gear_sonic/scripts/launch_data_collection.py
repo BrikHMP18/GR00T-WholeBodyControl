@@ -18,6 +18,12 @@ Starts the full data collection stack in a single tmux session:
     │ (.venv_sim)                                     │
     └─────────────────────────────────────────────────┘
 
+    Window 2 — pico_vision  (only when --pico-vision is passed):
+    ┌─────────────────────────────────────────────────┐
+    │ Ego camera stream to PICO Remote Vision          │
+    │ (.venv_data_collection + system GStreamer)       │
+    └─────────────────────────────────────────────────┘
+
 Prerequisites:
     - tmux installed (sudo apt install tmux)
     - Virtual environments set up:
@@ -30,6 +36,7 @@ Usage (from repo root — no venv activation needed):
     python gear_sonic/scripts/launch_data_collection.py              # real robot (default)
     python gear_sonic/scripts/launch_data_collection.py --sim        # MuJoCo sim
     python gear_sonic/scripts/launch_data_collection.py --no-camera-viewer  # skip viewer
+    python gear_sonic/scripts/launch_data_collection.py --pico-vision --pico-ip 192.168.0.128
 """
 
 from dataclasses import dataclass
@@ -124,6 +131,25 @@ class DataCollectionLaunchConfig:
 
     pico_waist_tracking: bool = False
     """Enable waist tracking on the teleop streamer."""
+
+    # PICO Remote Vision options
+    pico_vision: bool = False
+    """Stream the selected camera feed to PICO Remote Vision in a separate tmux window."""
+
+    pico_ip: str = "192.168.0.128"
+    """PICO headset IP address for Remote Vision TCP streaming."""
+
+    pico_vision_camera_key: str = "ego_view"
+    """Camera key to stream to the PICO headset."""
+
+    pico_vision_port: int = 12345
+    """PICO Remote Vision TCP port."""
+
+    pico_vision_preview: bool = False
+    """Show a local OpenCV preview for the PICO vision stream."""
+
+    pico_vision_stretch: bool = False
+    """If True, stretch camera to 16:9 (old behaviour). Default letterbox inside 1280x720."""
 
     # Data exporter options
     task_prompt: str = "demo"
@@ -293,6 +319,12 @@ def main(config: DataCollectionLaunchConfig):
     print(f"  Wrist cameras:   {'Yes' if config.record_wrist_cameras else 'No'}")
     print(f"  Text-to-speech:  {'Yes' if config.text_to_speech else 'No'}")
     print(f"  PICO vis:        vr3pt={config.pico_vis_vr3pt} smpl={config.pico_vis_smpl}")
+    print(f"  PICO vision:     {'Yes' if config.pico_vision else 'No'}")
+    if config.pico_vision:
+        print(
+            f"  PICO stream:     {config.pico_vision_camera_key} -> "
+            f"{config.pico_ip}:{config.pico_vision_port}"
+        )
     print(f"  PC IP (for PICO): {_get_local_ip()}")
     print("=" * 60)
 
@@ -317,6 +349,39 @@ def main(config: DataCollectionLaunchConfig):
         )
         print("Starting MuJoCo simulator (window: sim)...")
         time.sleep(3.0)
+
+        # Switch back to the data_collection window for the remaining panes
+        subprocess.run(
+            ["tmux", "select-window", "-t", f"{SESSION_NAME}:data_collection"],
+        )
+
+    # --- Window: PICO Remote Vision camera stream ---
+    if config.pico_vision:
+        subprocess.run(
+            ["tmux", "new-window", "-t", SESSION_NAME, "-n", "pico_vision"],
+        )
+        pico_vision_cmd = (
+            f"cd {repo_root} && "
+            f"source .venv_data_collection/bin/activate && "
+            f"export PYTHONPATH=/usr/lib/python3/dist-packages:${{PYTHONPATH:-}} && "
+            f"python -m gear_sonic.scripts.stream_camera_to_pico "
+            f"--camera-host {config.camera_host} "
+            f"--camera-port {config.camera_port} "
+            f"--camera-key {config.pico_vision_camera_key} "
+            f"--pico-ip {config.pico_ip} "
+            f"--pico-port {config.pico_vision_port}"
+        )
+        if config.pico_vision_preview:
+            pico_vision_cmd += " --show-preview"
+        if config.pico_vision_stretch:
+            pico_vision_cmd += " --stretch"
+
+        pico_vision_target = f"{SESSION_NAME}:pico_vision"
+        subprocess.run(
+            ["tmux", "send-keys", "-t", pico_vision_target, pico_vision_cmd, "C-m"],
+        )
+        print("Starting PICO Remote Vision camera stream (window: pico_vision)...")
+        time.sleep(1.0)
 
         # Switch back to the data_collection window for the remaining panes
         subprocess.run(
@@ -414,6 +479,13 @@ def main(config: DataCollectionLaunchConfig):
         print("  Window 'sim':")
         print("    MuJoCo Simulator (.venv_sim)")
         print()
+    if config.pico_vision:
+        print("  Window 'pico_vision':")
+        print(
+            f"    {config.pico_vision_camera_key} camera stream -> "
+            f"PICO {config.pico_ip}:{config.pico_vision_port}"
+        )
+        print()
     print("  Window 'data_collection':")
     print("    Pane 0 (top-left):     C++ Deploy")
     print("    Pane 1 (bottom-left):  PICO Teleop")
@@ -426,7 +498,7 @@ def main(config: DataCollectionLaunchConfig):
     print()
     print("  Controls:")
     print("    Ctrl+b, arrow keys  - Switch between panes")
-    if config.sim:
+    if config.sim or config.pico_vision:
         print("    Ctrl+b, n / p       - Next / previous window")
     print("    Ctrl+b, d           - Detach from session")
     print("    Ctrl+\\              - Kill entire session")
