@@ -120,8 +120,14 @@ fi
 export CMAKE_PREFIX_PATH="$CMAKE_PATHS:$CMAKE_PREFIX_PATH"
 export OPENSSL_ROOT_DIR="/usr"
 
-# ROS2 Environment Setup - dynamically find ROS2 installation
+# ROS2 Environment Setup - opt-in only. The ZMQ/PICO data-collection path does
+# not need ROS2, and mixing ROS2/Conda headers can break desktop builds.
 ROS2_FOUND=false
+
+if [ "${HAS_ROS2:-0}" != "1" ]; then
+    echo "ℹ️  ROS2 disabled (set HAS_ROS2=1 to enable ROS2InputHandler support)"
+    export HAS_ROS2=0
+else
 
 # Common ROS2 distributions in order of preference (newest first)
 ROS2_DISTROS=("jazzy" "iron" "humble" "galactic" "foxy" "eloquent" "dashing" "crystal")
@@ -131,7 +137,7 @@ for install_path in "${ROS2_INSTALL_PATHS[@]}"; do
     if [ "$ROS2_FOUND" = true ]; then
         break
     fi
-    
+
     for distro in "${ROS2_DISTROS[@]}"; do
         ros2_setup_file="$install_path/$distro/setup.bash"
         if [ -f "$ros2_setup_file" ]; then
@@ -154,6 +160,7 @@ if [ "$ROS2_FOUND" = false ]; then
     echo "   Install ROS2 system-wide for ROS2InputHandler support"
     echo "   Building will continue without ROS2InputHandler"
     export HAS_ROS2=0
+fi
 fi
 
 # Set up production FastRTPS profile
