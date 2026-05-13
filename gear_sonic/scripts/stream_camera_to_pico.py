@@ -38,6 +38,9 @@ class StreamCameraToPicoConfig:
     height: int = 720
     """Output stream height expected by the PICO Remote Vision app."""
 
+    stretch: bool = False
+    """If True, stretch source to width×height (distorts non-16:9). If False, letterbox."""
+
     fps: int = 30
     """Output stream frame rate."""
 
@@ -74,6 +77,7 @@ def main(config: StreamCameraToPicoConfig):
     from gear_sonic.camera.pico_video_streamer import (
         PicoVideoStreamer,
         PicoVideoStreamerConfig,
+        letterbox_bgr,
     )
 
     client = ComposedCameraClientSensor(server_ip=config.camera_host, port=config.camera_port)
@@ -84,6 +88,7 @@ def main(config: StreamCameraToPicoConfig):
             width=config.width,
             height=config.height,
             fps=config.fps,
+            letterbox=not config.stretch,
         )
     )
 
@@ -122,7 +127,14 @@ def main(config: StreamCameraToPicoConfig):
 
                     if config.show_preview:
                         img_bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
-                        preview = cv2.resize(img_bgr, (config.width, config.height))
+                        if config.stretch:
+                            preview = cv2.resize(
+                                img_bgr, (config.width, config.height)
+                            )
+                        else:
+                            preview = letterbox_bgr(
+                                img_bgr, config.width, config.height
+                            )
                         cv2.imshow("PICO camera stream preview", preview)
                         if cv2.waitKey(1) & 0xFF == ord("q"):
                             break
@@ -157,6 +169,11 @@ def parse_args() -> StreamCameraToPicoConfig:
     parser.add_argument("--width", type=int, default=1280)
     parser.add_argument("--height", type=int, default=720)
     parser.add_argument("--fps", type=int, default=30)
+    parser.add_argument(
+        "--stretch",
+        action="store_true",
+        help="Stretch to output size (distorts). Default: letterbox to preserve aspect.",
+    )
     parser.add_argument("--show-preview", action="store_true")
     parser.add_argument("--list-keys-only", action="store_true")
     parser.add_argument("--startup-timeout-s", type=float, default=10.0)

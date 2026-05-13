@@ -148,6 +148,9 @@ class DataCollectionLaunchConfig:
     pico_vision_preview: bool = False
     """Show a local OpenCV preview for the PICO vision stream."""
 
+    pico_vision_stretch: bool = False
+    """If True, stretch camera to 16:9 (old behaviour). Default letterbox inside 1280x720."""
+
     # Data exporter options
     task_prompt: str = "demo"
     """Language task prompt for the data exporter."""
@@ -370,6 +373,8 @@ def main(config: DataCollectionLaunchConfig):
         )
         if config.pico_vision_preview:
             pico_vision_cmd += " --show-preview"
+        if config.pico_vision_stretch:
+            pico_vision_cmd += " --stretch"
 
         pico_vision_target = f"{SESSION_NAME}:pico_vision"
         subprocess.run(

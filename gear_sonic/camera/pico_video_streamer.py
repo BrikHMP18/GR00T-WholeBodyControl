@@ -18,6 +18,27 @@ import cv2
 import numpy as np
 
 
+def letterbox_bgr(
+    img_bgr: np.ndarray,
+    out_w: int,
+    out_h: int,
+    fill: tuple[int, int, int] = (0, 0, 0),
+) -> np.ndarray:
+    """Scale image to fit inside (out_w, out_h) preserving aspect ratio; pad with ``fill``."""
+    h, w = img_bgr.shape[:2]
+    if w == out_w and h == out_h:
+        return img_bgr
+    scale = min(out_w / w, out_h / h)
+    nw = max(1, int(round(w * scale)))
+    nh = max(1, int(round(h * scale)))
+    resized = cv2.resize(img_bgr, (nw, nh), interpolation=cv2.INTER_LINEAR)
+    canvas = np.full((out_h, out_w, 3), fill, dtype=np.uint8)
+    x0 = (out_w - nw) // 2
+    y0 = (out_h - nh) // 2
+    canvas[y0 : y0 + nh, x0 : x0 + nw] = resized
+    return canvas
+
+
 @dataclass
 class PicoVideoStreamerConfig:
     """Configuration for the PICO H.264 stream."""
@@ -29,6 +50,8 @@ class PicoVideoStreamerConfig:
     fps: int = 30
     reconnect_interval_s: float = 1.0
     connect_timeout_s: float = 2.0
+    letterbox: bool = True
+    """If True, preserve source aspect ratio inside width×height (black bars). If False, stretch."""
 
 
 class PicoVideoStreamer:
@@ -187,11 +210,16 @@ class PicoVideoStreamer:
 
             if frame is not None and self._appsrc is not None:
                 if frame.shape[1] != self.config.width or frame.shape[0] != self.config.height:
-                    frame = cv2.resize(
-                        frame,
-                        (self.config.width, self.config.height),
-                        interpolation=cv2.INTER_LINEAR,
-                    )
+                    if self.config.letterbox:
+                        frame = letterbox_bgr(
+                            frame, self.config.width, self.config.height
+                        )
+                    else:
+                        frame = cv2.resize(
+                            frame,
+                            (self.config.width, self.config.height),
+                            interpolation=cv2.INTER_LINEAR,
+                        )
 
                 frame = np.ascontiguousarray(frame)
                 gst_buf = self._Gst.Buffer.new_wrapped(frame.tobytes())
