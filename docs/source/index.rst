@@ -91,6 +91,7 @@ Documentation
    tutorials/manager
    tutorials/vr_wholebody_teleop
    tutorials/data_collection
+   tutorials/pico_vision
 
 .. toctree::
    :maxdepth: 2
