@@ -29,16 +29,7 @@ source .venv_camera/bin/activate
 Find the USB camera index:
 
 ```bash
-python - <<'PY'
-import cv2
-for i in range(10):
-    cap = cv2.VideoCapture(i, cv2.CAP_V4L2)
-    ok_open = cap.isOpened()
-    ok_read, frame = cap.read() if ok_open else (False, None)
-    shape = None if frame is None else frame.shape
-    print(f"index {i}: open={ok_open}, read={ok_read}, shape={shape}")
-    cap.release()
-PY
+v4l2-ctl --list-devices
 ```
 
 Start the camera server. Replace `0` with the working index:
@@ -46,7 +37,9 @@ Start the camera server. Replace `0` with the working index:
 ```bash
 python -m gear_sonic.camera.composed_camera \
   --ego-view-camera usb \
-  --ego-view-device-id 0 \
+  --ego-view-device-id 6 \
+  --right-wrist-camera usb \
+  --right-wrist-device-id 8 \
   --port 5555
 ```
 
