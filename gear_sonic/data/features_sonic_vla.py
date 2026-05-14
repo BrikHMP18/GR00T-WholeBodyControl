@@ -369,30 +369,38 @@ def get_features_sonic_vla(robot_model: RobotModel) -> dict:
     }
 
 
-def get_wrist_camera_features() -> dict:
-    """Features for optional wrist cameras (added when ``record_wrist_cameras`` is enabled)."""
-    return {
-        "observation.images.left_wrist": {
+def get_wrist_camera_features(sides: frozenset[str]) -> dict:
+    """Features for optional wrist cameras (subset of ``{"left", "right"}``)."""
+    allowed = {"left", "right"}
+    if not sides <= allowed:
+        raise ValueError(f"sides must be subset of {allowed}, got {sides}")
+    out: dict = {}
+    if "left" in sides:
+        out["observation.images.left_wrist"] = {
             "dtype": "video",
             "shape": [WRIST_VIEW_HEIGHT, WRIST_VIEW_WIDTH, 3],
             "names": ["height", "width", "channel"],
-        },
-        "observation.images.right_wrist": {
+        }
+    if "right" in sides:
+        out["observation.images.right_wrist"] = {
             "dtype": "video",
             "shape": [WRIST_VIEW_HEIGHT, WRIST_VIEW_WIDTH, 3],
             "names": ["height", "width", "channel"],
-        },
-    }
+        }
+    return out
 
 
-def get_wrist_camera_modality_config() -> dict:
-    """Modality config entries for optional wrist cameras."""
-    return {
-        "video": {
-            "left_wrist": {"original_key": "observation.images.left_wrist"},
-            "right_wrist": {"original_key": "observation.images.right_wrist"},
-        },
-    }
+def get_wrist_camera_modality_config(sides: frozenset[str]) -> dict:
+    """Modality config entries for optional wrist cameras (subset of left/right)."""
+    allowed = {"left", "right"}
+    if not sides <= allowed:
+        raise ValueError(f"sides must be subset of {allowed}, got {sides}")
+    video: dict = {}
+    if "left" in sides:
+        video["left_wrist"] = {"original_key": "observation.images.left_wrist"}
+    if "right" in sides:
+        video["right_wrist"] = {"original_key": "observation.images.right_wrist"}
+    return {"video": video}
 
 
 def get_g1_robot_model(

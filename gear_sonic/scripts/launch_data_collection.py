@@ -74,6 +74,7 @@ def _bootstrap_venv():
 _bootstrap_venv()
 
 import tyro
+from typing import Literal
 
 
 def _get_local_ip() -> str:
@@ -162,7 +163,10 @@ class DataCollectionLaunchConfig:
     """Data collection frequency (Hz) for the data exporter."""
 
     record_wrist_cameras: bool = False
-    """Record wrist camera streams (left_wrist, right_wrist) in the dataset."""
+    """If True, record both wrist streams (deprecated: use ``wrist_cameras``)."""
+
+    wrist_cameras: Literal["none", "left", "right", "both"] = "none"
+    """Which wrist streams the data exporter records (``right`` = ego + right only, no left camera required)."""
 
     text_to_speech: bool = True
     """Enable voice feedback via espeak (data exporter)."""
@@ -316,7 +320,13 @@ def main(config: DataCollectionLaunchConfig):
     print(f"  Camera:          {config.camera_host}:{config.camera_port}")
     print(f"  DC frequency:    {config.data_exporter_frequency} Hz")
     print(f"  Camera viewer:   {'Yes' if config.camera_viewer else 'No'}")
-    print(f"  Wrist cameras:   {'Yes' if config.record_wrist_cameras else 'No'}")
+    if config.record_wrist_cameras:
+        wc_disp = "both (legacy --record-wrist-cameras)"
+    elif config.wrist_cameras != "none":
+        wc_disp = config.wrist_cameras
+    else:
+        wc_disp = "none"
+    print(f"  Wrist cameras:   {wc_disp}")
     print(f"  Text-to-speech:  {'Yes' if config.text_to_speech else 'No'}")
     print(f"  PICO vis:        vr3pt={config.pico_vis_vr3pt} smpl={config.pico_vis_smpl}")
     print(f"  PICO vision:     {'Yes' if config.pico_vision else 'No'}")
@@ -458,6 +468,8 @@ def main(config: DataCollectionLaunchConfig):
         exporter_cmd += f" --dataset-name '{config.dataset_name}'"
     if config.record_wrist_cameras:
         exporter_cmd += " --record-wrist-cameras"
+    elif config.wrist_cameras != "none":
+        exporter_cmd += f" --wrist-cameras {config.wrist_cameras}"
     if not config.text_to_speech:
         exporter_cmd += " --no-text-to-speech"
 

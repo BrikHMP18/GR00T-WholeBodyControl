@@ -1,6 +1,8 @@
 # PICO Remote Vision
 
-Stream robot camera feeds to the PICO headset during teleoperation and data collection. Pose tracking uses a separate path:
+Stream robot camera feeds to the PICO headset during teleoperation and data collection. For a short **real-robot recording checklist** (camera, tmux, controls), see [`docs-nonhuman/record_data.md`](../../../docs-nonhuman/record_data.md) in the repo.
+
+Pose tracking uses a separate path:
 
 ```text
 PICO pose tracking:      PICO -> PC
@@ -96,8 +98,10 @@ python gear_sonic/scripts/launch_data_collection.py \
   --camera-host 192.168.123.164 \
   --camera-port 5555 \
   --task-prompt "Describe your task here." \
-  --record-wrist-cameras
+  --wrist-cameras right
 ```
+
+Use `--wrist-cameras right` for ego + right wrist only; use `--wrist-cameras both` (or `--record-wrist-cameras`) only when the camera server exposes **both** wrist streams.
 
 Local OpenCV preview of the stream being encoded:
 

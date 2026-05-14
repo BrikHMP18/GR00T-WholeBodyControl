@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from datetime import datetime
 import json
 import time
+from typing import Literal
 
 import numpy as np
 from scipy.spatial.transform import Rotation as R
@@ -52,6 +53,33 @@ from gear_sonic.utils.data_collection.zmq_state_subscriber import (
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
+
+WristCamerasChoice = Literal["none", "left", "right", "both"]
+
+
+def _resolve_wrist_sides(
+    record_wrist_cameras: bool, wrist_cameras: WristCamerasChoice
+) -> frozenset[str]:
+    """``record_wrist_cameras`` (deprecated) forces both wrists when True."""
+    if record_wrist_cameras:
+        return frozenset({"left", "right"})
+    if wrist_cameras == "none":
+        return frozenset()
+    if wrist_cameras == "left":
+        return frozenset({"left"})
+    if wrist_cameras == "right":
+        return frozenset({"right"})
+    return frozenset({"left", "right"})
+
+
+def _wrist_cameras_label(sides: frozenset[str]) -> WristCamerasChoice:
+    if not sides:
+        return "none"
+    if sides == frozenset({"left", "right"}):
+        return "both"
+    if "left" in sides:
+        return "left"
+    return "right"
 
 
 @dataclass
@@ -98,7 +126,10 @@ class SonicDataExporterConfig:
     """Seconds to wait for the ZMQ robot_config message at startup (0 = wait forever)."""
 
     record_wrist_cameras: bool = False
-    """Record wrist camera streams (left_wrist, right_wrist). Requires cameras to be available."""
+    """If True, record **both** wrist streams (same as ``--wrist-cameras both``). Deprecated: use ``wrist_cameras``."""
+
+    wrist_cameras: WristCamerasChoice = "none"
+    """Which wrist RGB streams to record: ``none``, ``left``, ``right``, or ``both`` (composed_camera must publish matching ``images`` keys)."""
 
     text_to_speech: bool = True
     """Use text-to-speech voice feedback."""
@@ -914,10 +945,11 @@ def main(config: SonicDataExporterConfig):
     dataset_features = get_features_sonic_vla(g1_rm)
     modality_config = get_modality_config_sonic_vla(g1_rm)
 
-    if config.record_wrist_cameras:
-        print("[Camera] Wrist cameras enabled — adding to dataset schema")
-        dataset_features.update(get_wrist_camera_features())
-        wrist_modality = get_wrist_camera_modality_config()
+    wrist_sides = _resolve_wrist_sides(config.record_wrist_cameras, config.wrist_cameras)
+    if wrist_sides:
+        print(f"[Camera] Wrist cameras in schema: {sorted(wrist_sides)}")
+        dataset_features.update(get_wrist_camera_features(wrist_sides))
+        wrist_modality = get_wrist_camera_modality_config(wrist_sides)
         for key, value in wrist_modality.items():
             if key in modality_config:
                 modality_config[key].update(value)
@@ -936,7 +968,11 @@ def main(config: SonicDataExporterConfig):
         features=dataset_features,
         modality_config=modality_config,
         task=config.task_prompt,
-        script_config={**robot_config, "record_wrist_cameras": config.record_wrist_cameras},
+        script_config={
+            **robot_config,
+            "record_wrist_cameras": wrist_sides == frozenset({"left", "right"}),
+            "wrist_cameras": _wrist_cameras_label(wrist_sides),
+        },
     )
 
     data_collector = GrootDataCollector(

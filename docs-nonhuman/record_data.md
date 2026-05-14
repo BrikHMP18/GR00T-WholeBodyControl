@@ -1,6 +1,6 @@
 # Real Robot Data Recording Checklist
 
-Short checklist for recording VLA demos on the real G1.
+Short checklist for recording VLA demos on the real G1. For **PICO Remote Vision** (live camera in the headset while you record), see [below](#pico-remote-vision); the full walkthrough is [`docs/source/tutorials/pico_vision.md`](../docs/source/tutorials/pico_vision.md).
 
 ## 1. Connect
 
@@ -37,9 +37,9 @@ Start the camera server. Replace `0` with the working index:
 ```bash
 python -m gear_sonic.camera.composed_camera \
   --ego-view-camera usb \
-  --ego-view-device-id 6 \
+  --ego-view-device-id 8 \
   --right-wrist-camera usb \
-  --right-wrist-device-id 8 \
+  --right-wrist-device-id 6 \
   --port 5555
 ```
 
@@ -83,6 +83,46 @@ python gear_sonic/scripts/launch_data_collection.py \
 ```
 
 In tmux, confirm the deploy pane only when the robot is safe.
+
+### PICO Remote Vision
+
+Optional: stream the robot camera to the PICO app **during** the same tmux session as data collection. Video path: **robot (ZMQ)** → **workstation** → **headset (TCP)**; pose tracking still uses the app’s normal **Send** flow to the PC.
+
+**One-time on the workstation** (GStreamer / `x264enc`):
+
+```bash
+bash install_scripts/install_pico_vision_deps.sh
+gst-inspect-1.0 x264enc
+```
+
+**XRoboToolkit on the headset**: start a **Remote Vision** session (**ZEDMINI** → **Listen**). If the app asks for **camera source IP**, use the **workstation Wi‑Fi IP** (the machine running the encoder), **not** the robot’s `192.168.123.x`. For **tracking Send**, use that same PC Wi‑Fi IP. Default stream port in VR is often **12345** (override with `--pico-vision-port` on the launcher if yours differs).
+
+**IPs (typical setup)**
+
+| Flag / setting | Meaning |
+|----------------|--------|
+| `--camera-host` | Machine running `composed_camera` (often robot `192.168.123.164`) |
+| `--pico-ip` | Headset Wi‑Fi IP as reachable from the workstation (`ping` it first) |
+
+**Launch** (same idea as the public tutorial; adjust IPs and `--task-prompt`):
+
+```bash
+cd ~/NONHUMAN/GR00T-WholeBodyControl
+
+python gear_sonic/scripts/launch_data_collection.py \
+  --pico-vision \
+  --pico-ip 192.168.250.19 \
+  --camera-host 192.168.123.164 \
+  --camera-port 5555 \
+  --task-prompt "Describe your task here." \
+  --wrist-cameras right
+```
+
+Use `--wrist-cameras right` when you only have a **right** wrist camera (ego + right in the dataset). Use `--wrist-cameras both` or the legacy `--record-wrist-cameras` only when `composed_camera` publishes **both** `left_wrist` and `right_wrist`.
+
+Useful extras: `--pico-vision-preview` (OpenCV preview on the PC), `--pico-vision-camera-key right_wrist` (stream a wrist camera instead of `ego_view`), `--pico-vision-stretch` only if you want stretched 16:9 instead of default letterbox.
+
+More detail (test stream without tmux, USB vs OAK camera, troubleshooting): [`docs/source/tutorials/pico_vision.md`](../docs/source/tutorials/pico_vision.md).
 
 ## 5. PICO Controls
 

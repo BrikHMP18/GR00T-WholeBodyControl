@@ -252,7 +252,7 @@ python gear_sonic/scripts/launch_data_collection.py \
 python gear_sonic/scripts/launch_data_collection.py \
     --camera-host 192.168.123.164 \
     --task-prompt "pick up the cup" \
-    --record-wrist-cameras
+    --wrist-cameras both
 ```
 
 ```{tip}
@@ -276,7 +276,8 @@ Common options:
 | `--deploy-obs-config` | *(default)* | Custom observation config for deploy.sh |
 | `--deploy-planner` | *(default)* | Custom planner model path for deploy.sh |
 | `--deploy-motion-data` | *(default)* | Custom motion data path for deploy.sh |
-| `--record-wrist-cameras` | `False` | Record left/right wrist camera streams in the dataset |
+| `--record-wrist-cameras` | `False` | Legacy: record **both** wrist streams (same as ``--wrist-cameras both``) |
+| `--wrist-cameras` | `none` | Which wrist RGB streams to record: ``none``, ``left``, ``right``, or ``both`` (must match camera server keys) |
 | `--no-text-to-speech` | *(on)* | Disable voice feedback via espeak |
 
 Run `python gear_sonic/scripts/launch_data_collection.py --help` for all options.
@@ -350,6 +351,7 @@ All options are provided via CLI flags — no interactive prompts.  Key flags:
 | `--task-prompt` | `"demo"` | Language task description for this session |
 | `--dataset-name` | *(auto: timestamp)* | Dataset name.  Omit to create a new one, or pass an existing name to append episodes |
 | `--data-collection-frequency` | `50` | Recording frequency (Hz) |
+| `--wrist-cameras` | `none` | ``none`` / ``left`` / ``right`` / ``both`` for optional wrist video features |
 | `--root-output-dir` | `outputs` | Parent directory for saved datasets |
 
 ```{tip}
@@ -425,6 +427,8 @@ Key options:
 | `--task-prompt` | `"demo"` | Language task description for annotation |
 | `--dataset-name` | *(auto: timestamp)* | Dataset name; omit to auto-generate, or reuse an existing name to append |
 | `--data-collection-frequency` | `50` | Recording frequency in Hz |
+| `--record-wrist-cameras` | `False` | Legacy: record both wrists (same as ``--wrist-cameras both``) |
+| `--wrist-cameras` | `none` | ``none`` / ``left`` / ``right`` / ``both`` — must match keys from `composed_camera` |
 | `--camera-host` | `localhost` | Camera server hostname |
 | `--camera-port` | `5555` | Camera server port |
 | `--sonic-zmq-host` | `localhost` | SMPL pose publisher host |
@@ -449,8 +453,8 @@ outputs/2026-04-03-14-30-00-G1-robot01/
 │   ├── observation.images.ego_view/
 │   │   ├── episode_000000.mp4   # H264-encoded ego camera video
 │   │   └── ...
-│   ├── observation.images.left_wrist/   # (only with --record-wrist-cameras)
-│   └── observation.images.right_wrist/  # (only with --record-wrist-cameras)
+│   ├── observation.images.left_wrist/   # (with ``--wrist-cameras left`` or ``both``)
+│   └── observation.images.right_wrist/  # (with ``--wrist-cameras right`` or ``both``)
 └── meta/
     ├── info.json                # Dataset metadata (fps, features, sizes)
     ├── modality.json            # GR00T modality configuration
@@ -469,8 +473,8 @@ Each frame contains:
 | `observation.state.body_rotation_6d` | `(6,)` | Base orientation (6D rotation) |
 | `observation.state.projected_gravity` | `(3,)` | Gravity vector in body frame |
 | `observation.images.ego_view` | `(480, 640, 3)` | Ego camera image (saved as MP4 video) |
-| `observation.images.left_wrist` | `(480, 640, 3)` | Left wrist camera (only with `--record-wrist-cameras`) |
-| `observation.images.right_wrist` | `(480, 640, 3)` | Right wrist camera (only with `--record-wrist-cameras`) |
+| `observation.images.left_wrist` | `(480, 640, 3)` | Left wrist camera (with ``--wrist-cameras left`` or ``both``) |
+| `observation.images.right_wrist` | `(480, 640, 3)` | Right wrist camera (with ``--wrist-cameras right`` or ``both``) |
 | `action.joint_position` | `(N,)` | Teleop target joint positions |
 | `action.body_rotation_6d` | `(6,)` | Teleop target body rotation |
 | `annotation.human.action.task_description` | string | Task prompt for this frame |

@@ -530,13 +530,22 @@ python gear_sonic/scripts/launch_data_collection.py \
     --task-prompt "pick up the cup"
 ```
 
-For ego + wrist camera recording:
+For ego + **both** wrist cameras:
 
 ```bash
 python gear_sonic/scripts/launch_data_collection.py \
     --camera-host 192.168.123.164 \
     --task-prompt "pick up the cup" \
-    --record-wrist-cameras
+    --wrist-cameras both
+```
+
+For ego + **right** wrist only (no left camera on the robot):
+
+```bash
+python gear_sonic/scripts/launch_data_collection.py \
+    --camera-host 192.168.123.164 \
+    --task-prompt "pick up the cup" \
+    --wrist-cameras right
 ```
 
 Replace `192.168.123.164` with the robot computer IP if different.
@@ -599,7 +608,7 @@ python gear_sonic/scripts/run_camera_viewer.py \
     --camera-port 5555
 ```
 
-For wrist cameras, add `--record-wrist-cameras` to the data exporter command.
+For wrist cameras, add `--wrist-cameras right`, `--wrist-cameras left`, or `--wrist-cameras both` to the data exporter / launcher (``--record-wrist-cameras`` remains as a legacy alias for ``both``).
 
 ### Recording Controls
 
