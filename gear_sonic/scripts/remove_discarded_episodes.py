@@ -28,6 +28,9 @@ from typing import Optional
 import pandas as pd
 import tyro
 
+from process_dataset import apply_info_derived_counts
+from process_dataset import write_episodes_stats_jsonl
+
 
 # ---------------------------------------------------------------------------
 # Helper functions (reusing logic from process_dataset.py)
@@ -97,28 +100,6 @@ def get_video_paths(dataset_path: Path, info: dict, episode_index: int) -> dict[
             episode_chunk=episode_chunk,
         )
     return paths
-
-
-def episode_chunk_count(n_episodes: int, chunks_size: int) -> int:
-    """Number of chunk folders needed for episode indices 0 .. n_episodes-1."""
-    if n_episodes <= 0:
-        return 1
-    return max(1, (n_episodes - 1) // chunks_size + 1)
-
-
-def apply_info_derived_counts(info: dict, n_episodes: int, total_frames: int) -> None:
-    """Set total_episodes, total_frames, splits, total_videos, total_chunks in info.json."""
-    info["total_episodes"] = n_episodes
-    info["total_frames"] = total_frames
-
-    video_keys = get_video_keys(info)
-    info["total_videos"] = n_episodes * len(video_keys)
-
-    chunks_size = info.get("chunks_size", 1000)
-    info["total_chunks"] = episode_chunk_count(n_episodes, chunks_size)
-
-    # LeRobot: "0:N" => episode indices 0 .. N-1 (N is exclusive end)
-    info["splits"] = {"train": f"0:{n_episodes}"}
 
 
 # ---------------------------------------------------------------------------
@@ -282,6 +263,8 @@ def remove_discarded_episodes(
     modality_path = dataset_path / "meta" / "modality.json"
     if modality_path.exists():
         shutil.copy2(modality_path, meta_dir / "modality.json")
+
+    write_episodes_stats_jsonl(output_path, new_info)
     
     print("\n" + "=" * 70)
     print("  Cleanup complete!")

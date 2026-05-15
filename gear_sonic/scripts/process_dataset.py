@@ -150,6 +150,81 @@ def get_video_paths(dataset_path: Path, info: dict, episode_index: int) -> dict[
     return paths
 
 
+def feature_stats_from_dataframe(df: pd.DataFrame, info: dict) -> dict:
+    """Compute LeRobot v2.1 per-episode stats for non-video dataframe columns."""
+    stats = {}
+    features = info.get("features", {})
+
+    for key, feature in features.items():
+        if key not in df.columns:
+            continue
+        if feature.get("dtype") in ("video", "image", "string"):
+            continue
+
+        values = df[key].to_numpy()
+        if len(values) == 0:
+            continue
+
+        first = values[0]
+        if isinstance(first, (list, tuple, np.ndarray)):
+            arr = np.stack([np.asarray(v) for v in values])
+        else:
+            arr = values.reshape(-1, 1)
+
+        if arr.ndim == 1:
+            arr = arr.reshape(-1, 1)
+        arr = np.asarray(arr)
+        if not np.issubdtype(arr.dtype, np.number):
+            continue
+
+        stats[key] = {
+            "min": np.min(arr, axis=0).tolist(),
+            "max": np.max(arr, axis=0).tolist(),
+            "mean": np.mean(arr, axis=0).tolist(),
+            "std": np.std(arr, axis=0).tolist(),
+            "count": [int(len(df))],
+        }
+
+    return stats
+
+
+def write_episodes_stats_jsonl(dataset_path: Path, info: dict | None = None):
+    """Recompute meta/episodes_stats.jsonl from the final parquet files."""
+    info = info or load_info(dataset_path)
+    episodes_meta = load_episodes_meta(dataset_path)
+    stats_path = dataset_path / "meta" / "episodes_stats.jsonl"
+
+    with open(stats_path, "w", encoding="utf-8") as f:
+        for ep_meta in episodes_meta:
+            ep_idx = ep_meta["episode_index"]
+            parquet_path = get_parquet_path(dataset_path, info, ep_idx)
+            if not parquet_path.exists():
+                raise FileNotFoundError(f"Missing parquet for episode stats: {parquet_path}")
+
+            df = pd.read_parquet(parquet_path)
+            row = {
+                "episode_index": ep_idx,
+                "stats": feature_stats_from_dataframe(df, info),
+            }
+            f.write(json.dumps(row) + "\n")
+
+
+def episode_chunk_count(n_episodes: int, chunks_size: int) -> int:
+    """Number of chunk folders needed for episode indices 0 .. n_episodes-1."""
+    if n_episodes <= 0:
+        return 1
+    return max(1, (n_episodes - 1) // chunks_size + 1)
+
+
+def apply_info_derived_counts(info: dict, n_episodes: int, total_frames: int) -> None:
+    """Set info.json fields derived from final episode/frame counts."""
+    info["total_episodes"] = n_episodes
+    info["total_frames"] = total_frames
+    info["total_videos"] = n_episodes * len(get_video_keys(info))
+    info["total_chunks"] = episode_chunk_count(n_episodes, info.get("chunks_size", 1000))
+    info["splits"] = {"train": f"0:{n_episodes}"}
+
+
 def filter_video_frames(video_path: Path, valid_indices: np.ndarray, fps: int):
     """Re-encode a video keeping only frames at valid_indices."""
     input_container = av.open(str(video_path))
@@ -386,8 +461,7 @@ def write_output_dataset(
 
         total_frames += ep_len
 
-    info["total_episodes"] = len(all_episodes)
-    info["total_frames"] = total_frames
+    apply_info_derived_counts(info, len(all_episodes), total_frames)
 
     with open(meta_dir / "info.json", "w", encoding="utf-8") as f:
         json.dump(info, f, indent=4)
@@ -400,6 +474,8 @@ def write_output_dataset(
         with open(meta_dir / "tasks.jsonl", "w", encoding="utf-8") as f:
             for task in tasks_meta:
                 f.write(json.dumps(task) + "\n")
+
+    write_episodes_stats_jsonl(dest_path, info)
 
     return total_frames
 
@@ -561,10 +637,14 @@ def main(cfg: ProcessDatasetConfig):
             for em in episodes_meta:
                 f.write(json.dumps(em) + "\n")
 
-        ds_info["total_frames"] = sum(len(ep["df"]) for ep in all_episodes)
-        ds_info["total_episodes"] = len(all_episodes)
+        apply_info_derived_counts(
+            ds_info,
+            len(all_episodes),
+            sum(len(ep["df"]) for ep in all_episodes),
+        )
         with open(output_path / "meta" / "info.json", "w", encoding="utf-8") as f:
             json.dump(ds_info, f, indent=4)
+        write_episodes_stats_jsonl(output_path, ds_info)
     else:
         print(f"\nWriting output dataset to {output_path}...")
         write_output_dataset(
