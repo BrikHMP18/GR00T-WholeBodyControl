@@ -5,10 +5,10 @@ Starts the full data collection stack in a single tmux session:
 
     Window 0 — data_collection (4 panes):
     ┌───────────────────────┬───────────────────────┐
-    │ Pane 0: C++ Deploy    │ Pane 1: Data Exporter │
+    │ Pane 0: C++ Deploy    │ Pane 2: Data Exporter │
     │ (gear_sonic_deploy)   │ (.venv_data_collection)│
     ├───────────────────────┼───────────────────────┤
-    │ Pane 2: PICO Teleop   │ Pane 3: Camera Viewer │
+    │ Pane 1: PICO Teleop   │ Pane 3: Camera Viewer │
     │ (.venv_teleop)        │ (.venv_data_collection)│
     └───────────────────────┴───────────────────────┘
 
@@ -36,7 +36,8 @@ Usage (from repo root — no venv activation needed):
     python gear_sonic/scripts/launch_data_collection.py              # real robot (default)
     python gear_sonic/scripts/launch_data_collection.py --sim        # MuJoCo sim
     python gear_sonic/scripts/launch_data_collection.py --no-camera-viewer  # skip viewer
-    python gear_sonic/scripts/launch_data_collection.py --pico-vision --pico-ip 192.168.0.128
+    python gear_sonic/scripts/launch_data_collection.py --pico-vision        # USB PICO (default)
+    python gear_sonic/scripts/launch_data_collection.py --pico-transport wifi --pico-vision --pico-ip 192.168.0.128
 """
 
 from dataclasses import dataclass
@@ -97,6 +98,9 @@ class DataCollectionLaunchConfig:
     sim: bool = False
     """Run against MuJoCo sim (deploy.sh sim) instead of real robot."""
 
+    pico_transport: Literal["usb", "wifi"] = "usb"
+    """PICO connection transport. USB uses ADB reverse/forward; WiFi uses direct headset IP."""
+
     # C++ deploy options
     deploy_input_type: str = "zmq_manager"
     """Input type for the C++ deploy (zmq_manager, keyboard, etc.)."""
@@ -138,7 +142,7 @@ class DataCollectionLaunchConfig:
     """Stream the selected camera feed to PICO Remote Vision in a separate tmux window."""
 
     pico_ip: str = "192.168.0.128"
-    """PICO headset IP address for Remote Vision TCP streaming."""
+    """PICO headset IP address for Remote Vision TCP streaming when using ``--pico-transport wifi``."""
 
     pico_vision_camera_key: str = "ego_view"
     """Camera key to stream to the PICO headset."""
@@ -185,12 +189,15 @@ class DataCollectionLaunchConfig:
 SESSION_NAME = "sonic_data_collection"
 
 
-def _check_prerequisites(sim: bool = False):
+def _check_prerequisites(sim: bool = False, require_adb: bool = False):
     """Verify that required tools and venvs exist."""
     errors = []
 
     if not shutil.which("tmux"):
         errors.append("tmux is not installed. Install with: sudo apt install tmux")
+
+    if require_adb and not shutil.which("adb"):
+        errors.append("adb is not installed or not on PATH.")
 
     repo_root = Path(__file__).resolve().parent.parent.parent
 
@@ -226,6 +233,66 @@ def _check_prerequisites(sim: bool = False):
         sys.exit(1)
 
 
+def _run_checked(cmd: list[str], error_message: str):
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        print(error_message)
+        if result.stdout.strip():
+            print(result.stdout.strip())
+        if result.stderr.strip():
+            print(result.stderr.strip())
+        sys.exit(result.returncode)
+    return result
+
+
+def _configure_pico_usb_tunnels(config: DataCollectionLaunchConfig):
+    """Configure ADB tunnels for USB PICO tracking and optional Remote Vision."""
+    if config.pico_transport != "usb":
+        return
+
+    print("Configuring PICO USB ADB tunnels...")
+
+    devices = _run_checked(["adb", "devices"], "ERROR: adb devices failed.")
+    device_lines = [
+        line for line in devices.stdout.splitlines()
+        if line.strip().endswith("\tdevice")
+    ]
+    if not device_lines:
+        print("ERROR: No PICO device found by adb. Connect USB and accept debugging.")
+        if devices.stdout.strip():
+            print(devices.stdout.strip())
+        sys.exit(1)
+
+    subprocess.run(["adb", "reverse", "--remove", "tcp:63901"], capture_output=True)
+    _run_checked(
+        ["adb", "reverse", "tcp:63901", "tcp:63901"],
+        "ERROR: Failed to configure adb reverse for XRoboToolkit PC Service.",
+    )
+
+    if config.pico_vision:
+        stream_spec = f"tcp:{config.pico_vision_port}"
+        subprocess.run(["adb", "forward", "--remove", stream_spec], capture_output=True)
+        _run_checked(
+            ["adb", "forward", stream_spec, stream_spec],
+            "ERROR: Failed to configure adb forward for PICO Remote Vision.",
+        )
+
+    reverse_list = _run_checked(
+        ["adb", "reverse", "--list"],
+        "ERROR: adb reverse --list failed.",
+    )
+    print("ADB reverse:")
+    print(reverse_list.stdout.strip() or "(none)")
+
+    if config.pico_vision:
+        forward_list = _run_checked(
+            ["adb", "forward", "--list"],
+            "ERROR: adb forward --list failed.",
+        )
+        print("ADB forward:")
+        print(forward_list.stdout.strip() or "(none)")
+
+
 def _kill_existing_session():
     """Kill any existing tmux session with our name."""
     subprocess.run(
@@ -258,23 +325,23 @@ def _create_tmux_session():
     )
 
     # Split into 4 panes:
-    #   0 | 1
+    #   0 | 2
     #   -----
-    #   2 | 3
+    #   1 | 3
 
-    # Split horizontally: pane 0 (left) and pane 1 (right)
+    # Split vertically: pane 0 (top) and pane 1 (bottom)
     subprocess.run(
-        ["tmux", "split-window", "-t", f"{SESSION_NAME}:0", "-h"],
+        ["tmux", "split-window", "-t", f"{SESSION_NAME}:0", "-v"],
     )
 
-    # Split left pane vertically: pane 0 (top-left) and pane 2 (bottom-left)
+    # Split top pane horizontally: pane 0 (top-left) and pane 2 (top-right)
     subprocess.run(
-        ["tmux", "split-window", "-t", f"{SESSION_NAME}:0.0", "-v"],
+        ["tmux", "split-window", "-t", f"{SESSION_NAME}:0.0", "-h"],
     )
 
-    # Split right pane vertically: pane 1 becomes top-right, new pane 3 bottom-right
+    # Split bottom pane horizontally: pane 1 (bottom-left) and pane 3 (bottom-right)
     subprocess.run(
-        ["tmux", "split-window", "-t", f"{SESSION_NAME}:0.2", "-v"],
+        ["tmux", "split-window", "-t", f"{SESSION_NAME}:0.1", "-h"],
     )
 
     # Let all pane shells finish initialization (.bashrc, conda, etc.)
@@ -305,13 +372,22 @@ def _check_pane_alive(pane_index: int) -> bool:
 def main(config: DataCollectionLaunchConfig):
     repo_root = Path(__file__).resolve().parent.parent.parent
 
-    _check_prerequisites(sim=config.sim)
+    _check_prerequisites(sim=config.sim, require_adb=config.pico_transport == "usb")
     _kill_existing_session()
+    _configure_pico_usb_tunnels(config)
+
+    pico_stream_ip = "127.0.0.1" if config.pico_transport == "usb" else config.pico_ip
+    pc_service_ip_hint = (
+        "127.0.0.1 (USB/ADB reverse)"
+        if config.pico_transport == "usb"
+        else _get_local_ip()
+    )
 
     print("=" * 60)
     print("  SONIC Data Collection Launcher")
     print("=" * 60)
     print(f"  Mode:            {'Simulation' if config.sim else 'Real Robot'}")
+    print(f"  PICO transport:  {config.pico_transport}")
     print(f"  Task prompt:     {config.task_prompt}")
     print(f"  Dataset name:    {config.dataset_name or '(auto)'}")
     print(f"  Deploy input:    {config.deploy_input_type}")
@@ -333,9 +409,9 @@ def main(config: DataCollectionLaunchConfig):
     if config.pico_vision:
         print(
             f"  PICO stream:     {config.pico_vision_camera_key} -> "
-            f"{config.pico_ip}:{config.pico_vision_port}"
+            f"{pico_stream_ip}:{config.pico_vision_port}"
         )
-    print(f"  PC IP (for PICO): {_get_local_ip()}")
+    print(f"  PC Service IP:   {pc_service_ip_hint}")
     print("=" * 60)
 
     _create_tmux_session()
@@ -378,7 +454,7 @@ def main(config: DataCollectionLaunchConfig):
             f"--camera-host {config.camera_host} "
             f"--camera-port {config.camera_port} "
             f"--camera-key {config.pico_vision_camera_key} "
-            f"--pico-ip {config.pico_ip} "
+            f"--pico-ip {pico_stream_ip} "
             f"--pico-port {config.pico_vision_port}"
         )
         if config.pico_vision_preview:
@@ -495,7 +571,7 @@ def main(config: DataCollectionLaunchConfig):
         print("  Window 'pico_vision':")
         print(
             f"    {config.pico_vision_camera_key} camera stream -> "
-            f"PICO {config.pico_ip}:{config.pico_vision_port}"
+            f"PICO {pico_stream_ip}:{config.pico_vision_port}"
         )
         print()
     print("  Window 'data_collection':")
