@@ -46,6 +46,8 @@ VISION_SOURCE_PROFILES = {
     },
 }
 ROTATION_CHOICES = ("none", "cw90", "ccw90", "180")
+LAYOUT_CHOICES = ("single", "teleop_grid")
+TELEOP_GRID_CAMERA_KEYS = ("ego_view", "left_wrist", "right_wrist")
 
 
 @dataclass
@@ -98,7 +100,10 @@ class StreamCameraToPicoConfig:
     """If True, duplicate the selected mono camera into left/right eye views."""
 
     rotate: str = "none"
-    """Rotate the selected camera before streaming: none, cw90, ccw90, or 180."""
+    """Rotate ego_view before streaming: none, cw90, ccw90, or 180."""
+
+    layout: str = "single"
+    """Stream layout: single camera (--camera-key) or teleop_grid (ego + both wrists)."""
 
     show_preview: bool = False
     """Show a local OpenCV preview window for debugging."""
@@ -196,6 +201,76 @@ def _unwrap_command_packet(packet: bytes) -> bytes:
         if body_len and 4 + body_len <= len(packet):
             return packet[4 : 4 + body_len]
     return packet
+
+
+def _mono_stream_size(width: int, height: int, mono_to_stereo: bool) -> tuple[int, int]:
+    if mono_to_stereo:
+        return max(1, width // 2), height
+    return width, height
+
+
+def _build_preview_frame(
+    frame_bgr: Any,
+    width: int,
+    height: int,
+    mono_to_stereo: bool,
+    stretch: bool,
+):
+    import cv2
+
+    from gear_sonic.camera.pico_video_streamer import letterbox_bgr, stereo_pair_bgr
+
+    if mono_to_stereo:
+        return stereo_pair_bgr(
+            frame_bgr,
+            width,
+            height,
+            letterbox=not stretch,
+        )
+    if stretch:
+        return cv2.resize(frame_bgr, (width, height))
+    return letterbox_bgr(frame_bgr, width, height)
+
+
+def _build_stream_frame_rgb(
+    message: dict,
+    config: StreamCameraToPicoConfig,
+    mono_w: int,
+    mono_h: int,
+):
+    import cv2
+
+    from gear_sonic.camera.pico_video_streamer import compose_teleop_grid_bgr
+
+    images = message["images"]
+    if config.layout == "teleop_grid":
+        ego_rgb = images.get("ego_view")
+        if ego_rgb is None:
+            return None
+        ego_rgb = _rotate_frame_rgb(ego_rgb, config.rotate)
+        left_rgb = images.get("left_wrist")
+        right_rgb = images.get("right_wrist")
+        left_bgr = (
+            cv2.cvtColor(left_rgb, cv2.COLOR_RGB2BGR) if left_rgb is not None else None
+        )
+        right_bgr = (
+            cv2.cvtColor(right_rgb, cv2.COLOR_RGB2BGR) if right_rgb is not None else None
+        )
+        ego_bgr = cv2.cvtColor(ego_rgb, cv2.COLOR_RGB2BGR)
+        return compose_teleop_grid_bgr(
+            ego_bgr,
+            left_bgr,
+            right_bgr,
+            mono_w,
+            mono_h,
+            letterbox=not config.stretch,
+        )
+
+    img_rgb = images.get(config.camera_key)
+    if img_rgb is None:
+        return None
+    img_rgb = _rotate_frame_rgb(img_rgb, config.rotate)
+    return cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
 
 
 def _rotate_frame_rgb(frame_rgb: Any, rotate: str) -> Any:
@@ -350,8 +425,6 @@ def main(config: StreamCameraToPicoConfig):
     from gear_sonic.camera.pico_video_streamer import (
         PicoVideoStreamer,
         PicoVideoStreamerConfig,
-        letterbox_bgr,
-        stereo_pair_bgr,
     )
 
     stream_settings = _resolve_stream_settings(config)
@@ -395,21 +468,40 @@ def main(config: StreamCameraToPicoConfig):
         if config.list_keys_only:
             return
 
-        if config.camera_key not in first_message["images"]:
+        if config.layout == "teleop_grid":
+            missing_keys = [
+                key
+                for key in TELEOP_GRID_CAMERA_KEYS
+                if key not in first_message["images"]
+            ]
+            if missing_keys:
+                raise KeyError(
+                    "teleop_grid layout requires ego_view, left_wrist, and right_wrist. "
+                    f"Missing: {missing_keys}. Available keys: {available_keys}"
+                )
+        elif config.camera_key not in first_message["images"]:
             raise KeyError(
                 f"Camera key '{config.camera_key}' was not found. "
                 f"Available keys: {available_keys}"
             )
+
+        mono_w, mono_h = _mono_stream_size(width, height, mono_to_stereo)
 
         print(
             "Open PICO XRoboToolkit Remote Vision, select "
             f"{stream_settings['label']}, press Listen, use camera/source IP "
             "127.0.0.1 for USB, then keep this process running."
         )
+        layout_desc = (
+            "teleop_grid(ego_view+left_wrist+right_wrist)"
+            if config.layout == "teleop_grid"
+            else config.camera_key
+        )
         print(
             "[stream_camera_to_pico] output "
             f"{width}x{height}@{fps} bitrate={bitrate_kbps}kbps "
-            f"mono_to_stereo={mono_to_stereo} rotate={config.rotate}"
+            f"mono_to_stereo={mono_to_stereo} layout={layout_desc} "
+            f"rotate={config.rotate}"
         )
         streamer.start()
 
@@ -421,29 +513,19 @@ def main(config: StreamCameraToPicoConfig):
             t0 = time.monotonic()
             message = client.read(blocking=False)
             if message and message.get("images"):
-                img_rgb = message["images"].get(config.camera_key)
-                if img_rgb is not None:
-                    img_rgb = _rotate_frame_rgb(img_rgb, config.rotate)
-                    streamer.submit_frame_rgb(img_rgb)
+                frame_bgr = _build_stream_frame_rgb(message, config, mono_w, mono_h)
+                if frame_bgr is not None:
+                    streamer.submit_frame_bgr(frame_bgr)
                     frame_count += 1
 
                     if config.show_preview:
-                        img_bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
-                        if mono_to_stereo:
-                            preview = stereo_pair_bgr(
-                                img_bgr,
-                                width,
-                                height,
-                                letterbox=not config.stretch,
-                            )
-                        elif config.stretch:
-                            preview = cv2.resize(
-                                img_bgr, (width, height)
-                            )
-                        else:
-                            preview = letterbox_bgr(
-                                img_bgr, width, height
-                            )
+                        preview = _build_preview_frame(
+                            frame_bgr,
+                            width,
+                            height,
+                            mono_to_stereo,
+                            config.stretch,
+                        )
                         cv2.imshow("PICO camera stream preview", preview)
                         if cv2.waitKey(1) & 0xFF == ord("q"):
                             break
@@ -509,10 +591,19 @@ def parse_args() -> StreamCameraToPicoConfig:
         help="Send the selected camera as a single mono frame.",
     )
     parser.add_argument(
+        "--layout",
+        choices=LAYOUT_CHOICES,
+        default="single",
+        help=(
+            "Stream layout. single uses --camera-key only; teleop_grid composes "
+            "ego_view in the center column with left/right wrist cameras on the sides."
+        ),
+    )
+    parser.add_argument(
         "--rotate",
         choices=ROTATION_CHOICES,
         default="none",
-        help="Rotate the selected camera before streaming to PICO.",
+        help="Rotate ego_view before streaming to PICO (ignored for wrist cameras).",
     )
     parser.add_argument(
         "--stretch",

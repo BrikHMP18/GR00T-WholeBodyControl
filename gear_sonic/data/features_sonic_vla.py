@@ -13,12 +13,14 @@ from __future__ import annotations
 
 from typing import Literal
 
+from gear_sonic.camera.drivers.usb_camera import USBCameraConfig
 from gear_sonic.data.robot_model import RobotModel
 
-EGO_VIEW_HEIGHT: int = 480
-EGO_VIEW_WIDTH: int = 640
-WRIST_VIEW_HEIGHT: int = 480
-WRIST_VIEW_WIDTH: int = 640
+_default_usb_camera = USBCameraConfig()
+EGO_VIEW_WIDTH: int = _default_usb_camera.image_dim[0]
+EGO_VIEW_HEIGHT: int = _default_usb_camera.image_dim[1]
+WRIST_VIEW_WIDTH: int = _default_usb_camera.image_dim[0]
+WRIST_VIEW_HEIGHT: int = _default_usb_camera.image_dim[1]
 FPS: int = 50
 
 

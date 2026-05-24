@@ -9,8 +9,10 @@ from PICO pose/control tracking.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 import socket
 import struct
+import sys
 import threading
 import time
 
@@ -37,6 +39,62 @@ def letterbox_bgr(
     y0 = (out_h - nh) // 2
     canvas[y0 : y0 + nh, x0 : x0 + nw] = resized
     return canvas
+
+
+def compose_teleop_grid_bgr(
+    ego_bgr: np.ndarray | None,
+    left_wrist_bgr: np.ndarray | None,
+    right_wrist_bgr: np.ndarray | None,
+    out_w: int,
+    out_h: int,
+    letterbox: bool = True,
+) -> np.ndarray:
+    """Compose ego + wrist cameras into a 3x3 teleop grid.
+
+    Layout (1-indexed):
+
+        [dark] [ego ] [dark]
+        [left] [ego ] [right]
+        [dark] [ego ] [dark]
+
+    The center column shows a single ego-view panel spanning the full height.
+    Corner cells stay black. Only the middle-row side cells show wrist cameras.
+    """
+    canvas = np.zeros((out_h, out_w, 3), dtype=np.uint8)
+    cell_w = max(1, out_w // 3)
+    cell_h = max(1, out_h // 3)
+    center_x = cell_w
+    center_w = max(1, out_w - 2 * cell_w)
+
+    if ego_bgr is not None:
+        if letterbox:
+            ego_panel = letterbox_bgr(ego_bgr, center_w, out_h)
+        else:
+            ego_panel = cv2.resize(
+                ego_bgr, (center_w, out_h), interpolation=cv2.INTER_LINEAR
+            )
+        canvas[:, center_x : center_x + center_w] = ego_panel
+
+    row_y = cell_h
+    if left_wrist_bgr is not None:
+        if letterbox:
+            left_panel = letterbox_bgr(left_wrist_bgr, cell_w, cell_h)
+        else:
+            left_panel = cv2.resize(
+                left_wrist_bgr, (cell_w, cell_h), interpolation=cv2.INTER_LINEAR
+            )
+        canvas[row_y : row_y + cell_h, 0:cell_w] = left_panel
+
+    if right_wrist_bgr is not None:
+        if letterbox:
+            right_panel = letterbox_bgr(right_wrist_bgr, cell_w, cell_h)
+        else:
+            right_panel = cv2.resize(
+                right_wrist_bgr, cell_w, cell_h, interpolation=cv2.INTER_LINEAR
+            )
+        canvas[row_y : row_y + cell_h, out_w - cell_w : out_w] = right_panel
+
+    return np.ascontiguousarray(canvas)
 
 
 def stereo_pair_bgr(
@@ -275,7 +333,19 @@ class PicoVideoStreamer:
         self._connected = False
 
     @staticmethod
+    def _ensure_system_gi_path() -> None:
+        """Let venv Python load system PyGObject/GStreamer bindings."""
+        candidates = [
+            "/usr/lib/python3/dist-packages",
+            f"/usr/lib/python3.{sys.version_info.minor}/site-packages",
+        ]
+        for path in candidates:
+            if os.path.isdir(path) and path not in sys.path:
+                sys.path.insert(0, path)
+
+    @staticmethod
     def _import_gstreamer():
+        PicoVideoStreamer._ensure_system_gi_path()
         try:
             import gi
 
@@ -284,8 +354,8 @@ class PicoVideoStreamer:
         except (ImportError, ValueError) as exc:
             raise ImportError(
                 "GStreamer Python bindings are required for PICO video streaming. "
-                "Install system packages such as python3-gi, gir1.2-gstreamer-1.0, "
-                "gstreamer1.0-plugins-good, gstreamer1.0-plugins-bad, and "
-                "gstreamer1.0-plugins-ugly."
+                "Run: bash install_scripts/install_pico_vision_deps.sh "
+                "Or export PYTHONPATH=/usr/lib/python3/dist-packages:$PYTHONPATH "
+                "before running stream_camera_to_pico."
             ) from exc
         return Gst

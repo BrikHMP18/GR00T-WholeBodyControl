@@ -157,7 +157,10 @@ class DataCollectionLaunchConfig:
     """XRoboToolkit Remote Vision source profile (``pico4u`` shows in the large PICO4U view)."""
 
     pico_vision_rotate: Literal["none", "cw90", "ccw90", "180"] = "none"
-    """Rotate the selected camera before streaming to PICO."""
+    """Rotate ego_view before streaming to PICO."""
+
+    pico_vision_layout: Literal["single", "teleop_grid"] = "single"
+    """PICO stream layout: single camera or teleop_grid (ego + both wrists)."""
 
     pico_vision_preview: bool = False
     """Show a local OpenCV preview for the PICO vision stream."""
@@ -424,7 +427,8 @@ def main(config: DataCollectionLaunchConfig):
     print(f"  PICO vision:     {'Yes' if config.pico_vision else 'No'}")
     if config.pico_vision:
         print(
-            f"  PICO stream:     {config.pico_vision_camera_key} -> "
+            f"  PICO stream:     {config.pico_vision_layout} "
+            f"({config.pico_vision_camera_key if config.pico_vision_layout == 'single' else 'ego_view+left_wrist+right_wrist'}) -> "
             f"{config.pico_vision_source} "
             f"{pico_stream_ip}:{config.pico_vision_port} "
             f"rotate={config.pico_vision_rotate}"
@@ -476,6 +480,7 @@ def main(config: DataCollectionLaunchConfig):
             f"--pico-port {config.pico_vision_port} "
             f"--vision-source {config.pico_vision_source} "
             f"--pico-command-port {config.pico_vision_command_port} "
+            f"--layout {config.pico_vision_layout} "
             f"--rotate {config.pico_vision_rotate}"
         )
         if config.pico_vision_preview:
@@ -590,8 +595,12 @@ def main(config: DataCollectionLaunchConfig):
         print()
     if config.pico_vision:
         print("  Window 'pico_vision':")
+        if config.pico_vision_layout == "teleop_grid":
+            stream_desc = "ego_view + left_wrist + right_wrist grid"
+        else:
+            stream_desc = f"{config.pico_vision_camera_key} camera stream"
         print(
-            f"    {config.pico_vision_camera_key} camera stream -> "
+            f"    {stream_desc} -> "
             f"PICO {pico_stream_ip}:{config.pico_vision_port}"
         )
         print()
