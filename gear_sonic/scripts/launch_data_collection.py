@@ -156,6 +156,9 @@ class DataCollectionLaunchConfig:
     pico_vision_source: Literal["pico4u", "zedmini", "raw"] = "pico4u"
     """XRoboToolkit Remote Vision source profile (``pico4u`` shows in the large PICO4U view)."""
 
+    pico_vision_rotate: Literal["none", "cw90", "ccw90", "180"] = "none"
+    """Rotate the selected camera before streaming to PICO."""
+
     pico_vision_preview: bool = False
     """Show a local OpenCV preview for the PICO vision stream."""
 
@@ -423,7 +426,8 @@ def main(config: DataCollectionLaunchConfig):
         print(
             f"  PICO stream:     {config.pico_vision_camera_key} -> "
             f"{config.pico_vision_source} "
-            f"{pico_stream_ip}:{config.pico_vision_port}"
+            f"{pico_stream_ip}:{config.pico_vision_port} "
+            f"rotate={config.pico_vision_rotate}"
         )
     print(f"  PC Service IP:   {pc_service_ip_hint}")
     print("=" * 60)
@@ -471,7 +475,8 @@ def main(config: DataCollectionLaunchConfig):
             f"--pico-ip {pico_stream_ip} "
             f"--pico-port {config.pico_vision_port} "
             f"--vision-source {config.pico_vision_source} "
-            f"--pico-command-port {config.pico_vision_command_port}"
+            f"--pico-command-port {config.pico_vision_command_port} "
+            f"--rotate {config.pico_vision_rotate}"
         )
         if config.pico_vision_preview:
             pico_vision_cmd += " --show-preview"

@@ -1,6 +1,6 @@
 # Real Robot Data Recording Checklist With PICO USB
 
-Ultima modificacion: 2026-05-24 15:36:59 -05 -0500
+Ultima modificacion: 2026-05-24 16:21:40 -05 -0500
 
 Short checklist for recording VLA demos on the real G1 while the PICO is
 connected to the laptop by USB/ADB. The robot camera server is expected at
@@ -105,6 +105,10 @@ stream port: 12345
 Use `PICO4U` for the large viewer. `ZEDMINI` is the rectangular stereo viewer
 and is not the default for this USB flow.
 
+If the head camera is physically mounted `90` degrees counterclockwise, use
+`--pico-vision-rotate cw90` in the launcher. This correction affects only the
+PICO Remote Vision stream; the dataset keeps the original camera image.
+
 ## 5. Record Data With PICO USB
 
 On the laptop:
@@ -117,11 +121,12 @@ python gear_sonic/scripts/launch_data_collection.py \
   --pico-transport usb \
   --pico-vision \
   --pico-vision-camera-key ego_view \
+  --pico-vision-rotate cw90 \
   --camera-host 192.168.123.164 \
   --camera-port 5555 \
   --wrist-cameras both \
-  --task-prompt "real shelf manipulation" \
-  --dataset-name "real_usb_head_wrist_episode"
+  --task-prompt "push the panda and the toilet paper" \
+  --dataset-name "push_objects_s1"
 ```
 
 This records `ego_view`, `left_wrist`, and `right_wrist` in the dataset while
@@ -134,6 +139,7 @@ python gear_sonic/scripts/launch_data_collection.py \
   --pico-transport usb \
   --pico-vision \
   --pico-vision-camera-key ego_view \
+  --pico-vision-rotate cw90 \
   --camera-host 192.168.123.164 \
   --camera-port 5555 \
   --wrist-cameras none \
@@ -193,6 +199,10 @@ Camera/source IP: 127.0.0.1
 command port: 13579
 stream port: 12345
 ```
+
+If the PICO video is rotated because the physical camera is mounted sideways,
+use `--pico-vision-rotate cw90`. If that is the wrong direction, try
+`--pico-vision-rotate ccw90`.
 
 If the stream is still stale, restart only the PICO video pane or relaunch the
 tmux session:

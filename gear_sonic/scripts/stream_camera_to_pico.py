@@ -45,6 +45,7 @@ VISION_SOURCE_PROFILES = {
         "mono_to_stereo": False,
     },
 }
+ROTATION_CHOICES = ("none", "cw90", "ccw90", "180")
 
 
 @dataclass
@@ -95,6 +96,9 @@ class StreamCameraToPicoConfig:
 
     mono_to_stereo: bool | None = None
     """If True, duplicate the selected mono camera into left/right eye views."""
+
+    rotate: str = "none"
+    """Rotate the selected camera before streaming: none, cw90, ccw90, or 180."""
 
     show_preview: bool = False
     """Show a local OpenCV preview window for debugging."""
@@ -192,6 +196,23 @@ def _unwrap_command_packet(packet: bytes) -> bytes:
         if body_len and 4 + body_len <= len(packet):
             return packet[4 : 4 + body_len]
     return packet
+
+
+def _rotate_frame_rgb(frame_rgb: Any, rotate: str) -> Any:
+    if rotate == "none":
+        return frame_rgb
+
+    import cv2
+
+    rotation_codes = {
+        "cw90": cv2.ROTATE_90_CLOCKWISE,
+        "ccw90": cv2.ROTATE_90_COUNTERCLOCKWISE,
+        "180": cv2.ROTATE_180,
+    }
+    try:
+        return cv2.rotate(frame_rgb, rotation_codes[rotate])
+    except KeyError as exc:
+        raise ValueError(f"Unsupported rotation: {rotate}") from exc
 
 
 class RemoteVisionCommandServer:
@@ -388,7 +409,7 @@ def main(config: StreamCameraToPicoConfig):
         print(
             "[stream_camera_to_pico] output "
             f"{width}x{height}@{fps} bitrate={bitrate_kbps}kbps "
-            f"mono_to_stereo={mono_to_stereo}"
+            f"mono_to_stereo={mono_to_stereo} rotate={config.rotate}"
         )
         streamer.start()
 
@@ -402,6 +423,7 @@ def main(config: StreamCameraToPicoConfig):
             if message and message.get("images"):
                 img_rgb = message["images"].get(config.camera_key)
                 if img_rgb is not None:
+                    img_rgb = _rotate_frame_rgb(img_rgb, config.rotate)
                     streamer.submit_frame_rgb(img_rgb)
                     frame_count += 1
 
@@ -485,6 +507,12 @@ def parse_args() -> StreamCameraToPicoConfig:
         dest="mono_to_stereo",
         action="store_false",
         help="Send the selected camera as a single mono frame.",
+    )
+    parser.add_argument(
+        "--rotate",
+        choices=ROTATION_CHOICES,
+        default="none",
+        help="Rotate the selected camera before streaming to PICO.",
     )
     parser.add_argument(
         "--stretch",
