@@ -1,7 +1,7 @@
 """Bridge a GR00T composed-camera stream into PICO Remote Vision.
 
 Run the normal camera server on the robot, set the PICO XRoboToolkit Remote
-Vision session to listen as ZEDMINI, then run this script on the host that can
+Vision source to PICO4U by default, then run this script on the host that can
 reach both the camera server and the PICO headset.
 """
 
@@ -9,8 +9,42 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
+import socket
+import struct
+import threading
 import time
 from typing import Any
+
+
+VISION_SOURCE_PROFILES = {
+    "pico4u": {
+        "label": "PICO4U",
+        "camera_type": "VR",
+        "width": 2160,
+        "height": 810,
+        "fps": 30,
+        "bitrate_bps": 20 * 1024 * 1024,
+        "mono_to_stereo": True,
+    },
+    "zedmini": {
+        "label": "ZEDMINI",
+        "camera_type": "ZED",
+        "width": 2560,
+        "height": 720,
+        "fps": 30,
+        "bitrate_bps": 4_000_000,
+        "mono_to_stereo": True,
+    },
+    "raw": {
+        "label": "RAW",
+        "camera_type": "RAW",
+        "width": 1280,
+        "height": 720,
+        "fps": 30,
+        "bitrate_bps": 4_000_000,
+        "mono_to_stereo": False,
+    },
+}
 
 
 @dataclass
@@ -32,17 +66,35 @@ class StreamCameraToPicoConfig:
     pico_port: int = 12345
     """PICO Remote Vision TCP port used by XRoboToolkit."""
 
-    width: int = 1280
-    """Output stream width expected by the PICO Remote Vision app."""
+    vision_source: str = "pico4u"
+    """XRoboToolkit source profile: pico4u for the large PICO4U view, zedmini for the ZEDMINI rectangle."""
 
-    height: int = 720
-    """Output stream height expected by the PICO Remote Vision app."""
+    pico_command_host: str = "0.0.0.0"
+    """Host/IP where the XRoboToolkit Remote Vision command server listens."""
+
+    pico_command_port: int = 13579
+    """XRoboToolkit Remote Vision command port."""
+
+    command_server: bool = True
+    """Run a small command server so the PICO can send OPEN_CAMERA/CLOSE_CAMERA."""
+
+    width: int | None = None
+    """Output stream width. Defaults come from --vision-source."""
+
+    height: int | None = None
+    """Output stream height. Defaults come from --vision-source."""
+
+    bitrate_bps: int | None = None
+    """H.264 bitrate in bits per second. Defaults come from --vision-source."""
 
     stretch: bool = False
     """If True, stretch source to width×height (distorts non-16:9). If False, letterbox."""
 
-    fps: int = 30
-    """Output stream frame rate."""
+    fps: int | None = None
+    """Output stream frame rate. Defaults come from --vision-source."""
+
+    mono_to_stereo: bool | None = None
+    """If True, duplicate the selected mono camera into left/right eye views."""
 
     show_preview: bool = False
     """Show a local OpenCV preview window for debugging."""
@@ -52,6 +104,206 @@ class StreamCameraToPicoConfig:
 
     startup_timeout_s: float = 10.0
     """How long to wait for the first camera message."""
+
+
+@dataclass
+class RemoteVisionRequest:
+    """Camera request sent by the XRoboToolkit headset app."""
+
+    width: int = 2160
+    height: int = 810
+    fps: int = 30
+    bitrate_bps: int = 20 * 1024 * 1024
+    enable_mv_hevc: int = 0
+    render_mode: int = 2
+    port: int = 12345
+    camera: str = "VR"
+    ip: str = "127.0.0.1"
+
+
+def _resolve_stream_settings(config: StreamCameraToPicoConfig) -> dict[str, Any]:
+    profile = VISION_SOURCE_PROFILES[config.vision_source]
+    return {
+        "label": profile["label"],
+        "camera_type": profile["camera_type"],
+        "width": config.width or profile["width"],
+        "height": config.height or profile["height"],
+        "fps": config.fps or profile["fps"],
+        "bitrate_bps": config.bitrate_bps or profile["bitrate_bps"],
+        "mono_to_stereo": (
+            profile["mono_to_stereo"]
+            if config.mono_to_stereo is None
+            else config.mono_to_stereo
+        ),
+    }
+
+
+def _parse_compact_string(data: bytes, offset: int) -> tuple[str, int]:
+    if offset >= len(data):
+        return "", offset
+    length = data[offset]
+    offset += 1
+    value = data[offset : offset + length].decode("utf-8", errors="replace")
+    return value, offset + length
+
+
+def _parse_camera_request(data: bytes) -> RemoteVisionRequest:
+    if len(data) < 31 or data[:2] != b"\xca\xfe" or data[2] != 1:
+        raise ValueError("invalid camera request payload")
+
+    values = struct.unpack_from("<7i", data, 3)
+    camera, offset = _parse_compact_string(data, 31)
+    ip, _ = _parse_compact_string(data, offset)
+
+    return RemoteVisionRequest(
+        width=values[0],
+        height=values[1],
+        fps=values[2],
+        bitrate_bps=values[3],
+        enable_mv_hevc=values[4],
+        render_mode=values[5],
+        port=values[6],
+        camera=camera,
+        ip=ip,
+    )
+
+
+def _parse_network_protocol(data: bytes) -> tuple[str, bytes]:
+    if len(data) < 8:
+        raise ValueError("protocol message too small")
+
+    command_len = struct.unpack_from("<i", data, 0)[0]
+    command_start = 4
+    command_end = command_start + command_len
+    data_len = struct.unpack_from("<i", data, command_end)[0]
+    payload_start = command_end + 4
+    payload_end = payload_start + data_len
+
+    if command_len < 0 or data_len < 0 or payload_end > len(data):
+        raise ValueError("invalid protocol lengths")
+
+    command = data[command_start:command_end].decode("utf-8", errors="replace")
+    return command, data[payload_start:payload_end]
+
+
+def _unwrap_command_packet(packet: bytes) -> bytes:
+    if len(packet) >= 4:
+        body_len = struct.unpack(">I", packet[:4])[0]
+        if body_len and 4 + body_len <= len(packet):
+            return packet[4 : 4 + body_len]
+    return packet
+
+
+class RemoteVisionCommandServer:
+    """Minimal XRoboToolkit command server for OPEN_CAMERA/CLOSE_CAMERA logging."""
+
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        stream_host: str,
+        stream_port: int,
+        source_label: str,
+    ):
+        self.host = host
+        self.port = port
+        self.stream_host = stream_host
+        self.stream_port = stream_port
+        self.source_label = source_label
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def start(self):
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def stop(self):
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=1.0)
+            self._thread = None
+
+    def _run(self):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
+            server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            server.bind((self.host, self.port))
+            server.listen(1)
+            server.settimeout(0.5)
+            print(
+                "[RemoteVisionCommandServer] listening on "
+                f"{self.host}:{self.port} for {self.source_label}"
+            )
+
+            while not self._stop.is_set():
+                try:
+                    conn, addr = server.accept()
+                except socket.timeout:
+                    continue
+                except OSError:
+                    break
+
+                print(f"[RemoteVisionCommandServer] PICO connected from {addr}")
+                with conn:
+                    conn.settimeout(0.5)
+                    buffer = b""
+                    while not self._stop.is_set():
+                        try:
+                            chunk = conn.recv(65536)
+                        except socket.timeout:
+                            continue
+                        except OSError:
+                            break
+                        if not chunk:
+                            break
+                        buffer += chunk
+
+                        while buffer:
+                            if len(buffer) < 4:
+                                break
+                            body_len = struct.unpack(">I", buffer[:4])[0]
+                            if not (0 < body_len <= 16 * 1024 * 1024):
+                                buffer = b""
+                                break
+                            if len(buffer) < 4 + body_len:
+                                break
+                            packet = buffer[: 4 + body_len]
+                            buffer = buffer[4 + body_len :]
+
+                            try:
+                                command, payload = _parse_network_protocol(
+                                    _unwrap_command_packet(packet)
+                                )
+                            except Exception as exc:
+                                print(
+                                    "[RemoteVisionCommandServer] could not parse "
+                                    f"packet: {exc}"
+                                )
+                                continue
+
+                            if command == "OPEN_CAMERA":
+                                try:
+                                    request = _parse_camera_request(payload)
+                                    print(
+                                        "[RemoteVisionCommandServer] OPEN_CAMERA "
+                                        f"{request.camera} "
+                                        f"{request.width}x{request.height}@{request.fps} "
+                                        f"requested {request.ip}:{request.port}; "
+                                        f"streaming via {self.stream_host}:{self.stream_port}"
+                                    )
+                                except Exception as exc:
+                                    print(
+                                        "[RemoteVisionCommandServer] invalid "
+                                        f"OPEN_CAMERA payload: {exc}"
+                                    )
+                            elif command == "CLOSE_CAMERA":
+                                print("[RemoteVisionCommandServer] CLOSE_CAMERA")
+                            else:
+                                print(
+                                    "[RemoteVisionCommandServer] ignoring "
+                                    f"{command!r}"
+                                )
+
+                print("[RemoteVisionCommandServer] PICO disconnected")
 
 
 def _wait_for_first_frame(
@@ -78,21 +330,43 @@ def main(config: StreamCameraToPicoConfig):
         PicoVideoStreamer,
         PicoVideoStreamerConfig,
         letterbox_bgr,
+        stereo_pair_bgr,
     )
+
+    stream_settings = _resolve_stream_settings(config)
+    width = stream_settings["width"]
+    height = stream_settings["height"]
+    fps = stream_settings["fps"]
+    bitrate_kbps = max(1, int(round(stream_settings["bitrate_bps"] / 1000)))
+    mono_to_stereo = stream_settings["mono_to_stereo"]
 
     client = ComposedCameraClientSensor(server_ip=config.camera_host, port=config.camera_port)
     streamer = PicoVideoStreamer(
         PicoVideoStreamerConfig(
             pico_ip=config.pico_ip,
             pico_port=config.pico_port,
-            width=config.width,
-            height=config.height,
-            fps=config.fps,
+            width=width,
+            height=height,
+            fps=fps,
+            bitrate_kbps=bitrate_kbps,
             letterbox=not config.stretch,
+            mono_to_stereo=mono_to_stereo,
         )
     )
+    command_server = None
+    if config.command_server:
+        command_server = RemoteVisionCommandServer(
+            config.pico_command_host,
+            config.pico_command_port,
+            config.pico_ip,
+            config.pico_port,
+            stream_settings["label"],
+        )
 
     try:
+        if command_server is not None:
+            command_server.start()
+
         first_message = _wait_for_first_frame(client, config.startup_timeout_s)
         available_keys = sorted(first_message["images"].keys())
         print(f"Available camera keys: {available_keys}")
@@ -107,12 +381,18 @@ def main(config: StreamCameraToPicoConfig):
             )
 
         print(
-            "Open PICO XRoboToolkit Remote Vision, select ZEDMINI, "
-            "press Listen, then keep this process running."
+            "Open PICO XRoboToolkit Remote Vision, select "
+            f"{stream_settings['label']}, press Listen, use camera/source IP "
+            "127.0.0.1 for USB, then keep this process running."
+        )
+        print(
+            "[stream_camera_to_pico] output "
+            f"{width}x{height}@{fps} bitrate={bitrate_kbps}kbps "
+            f"mono_to_stereo={mono_to_stereo}"
         )
         streamer.start()
 
-        frame_period = 1.0 / config.fps
+        frame_period = 1.0 / fps
         frame_count = 0
         last_report = time.monotonic()
 
@@ -127,13 +407,20 @@ def main(config: StreamCameraToPicoConfig):
 
                     if config.show_preview:
                         img_bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
-                        if config.stretch:
+                        if mono_to_stereo:
+                            preview = stereo_pair_bgr(
+                                img_bgr,
+                                width,
+                                height,
+                                letterbox=not config.stretch,
+                            )
+                        elif config.stretch:
                             preview = cv2.resize(
-                                img_bgr, (config.width, config.height)
+                                img_bgr, (width, height)
                             )
                         else:
                             preview = letterbox_bgr(
-                                img_bgr, config.width, config.height
+                                img_bgr, width, height
                             )
                         cv2.imshow("PICO camera stream preview", preview)
                         if cv2.waitKey(1) & 0xFF == ord("q"):
@@ -151,6 +438,8 @@ def main(config: StreamCameraToPicoConfig):
     except KeyboardInterrupt:
         print("Stopping PICO camera stream...")
     finally:
+        if command_server is not None:
+            command_server.stop()
         streamer.stop()
         client.close()
         if config.show_preview:
@@ -166,9 +455,37 @@ def parse_args() -> StreamCameraToPicoConfig:
     parser.add_argument("--camera-key", default="ego_view")
     parser.add_argument("--pico-ip", default="192.168.0.128")
     parser.add_argument("--pico-port", type=int, default=12345)
-    parser.add_argument("--width", type=int, default=1280)
-    parser.add_argument("--height", type=int, default=720)
-    parser.add_argument("--fps", type=int, default=30)
+    parser.add_argument(
+        "--vision-source",
+        choices=sorted(VISION_SOURCE_PROFILES),
+        default="pico4u",
+        help="XRoboToolkit Remote Vision profile. Default pico4u uses the large PICO4U view.",
+    )
+    parser.add_argument("--pico-command-host", default="0.0.0.0")
+    parser.add_argument("--pico-command-port", type=int, default=13579)
+    parser.add_argument(
+        "--no-command-server",
+        dest="command_server",
+        action="store_false",
+        help="Do not listen for XRoboToolkit OPEN_CAMERA/CLOSE_CAMERA commands.",
+    )
+    parser.add_argument("--width", type=int, default=None)
+    parser.add_argument("--height", type=int, default=None)
+    parser.add_argument("--fps", type=int, default=None)
+    parser.add_argument("--bitrate-bps", type=int, default=None)
+    parser.add_argument(
+        "--mono-to-stereo",
+        dest="mono_to_stereo",
+        action="store_true",
+        default=None,
+        help="Duplicate one mono camera into side-by-side left/right eye views.",
+    )
+    parser.add_argument(
+        "--no-mono-to-stereo",
+        dest="mono_to_stereo",
+        action="store_false",
+        help="Send the selected camera as a single mono frame.",
+    )
     parser.add_argument(
         "--stretch",
         action="store_true",

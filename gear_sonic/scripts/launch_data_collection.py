@@ -150,11 +150,17 @@ class DataCollectionLaunchConfig:
     pico_vision_port: int = 12345
     """PICO Remote Vision TCP port."""
 
+    pico_vision_command_port: int = 13579
+    """PICO Remote Vision command port used when the headset requests a camera stream."""
+
+    pico_vision_source: Literal["pico4u", "zedmini", "raw"] = "pico4u"
+    """XRoboToolkit Remote Vision source profile (``pico4u`` shows in the large PICO4U view)."""
+
     pico_vision_preview: bool = False
     """Show a local OpenCV preview for the PICO vision stream."""
 
     pico_vision_stretch: bool = False
-    """If True, stretch camera to 16:9 (old behaviour). Default letterbox inside 1280x720."""
+    """If True, stretch camera inside the selected XRoboToolkit vision profile."""
 
     # Data exporter options
     task_prompt: str = "demo"
@@ -179,7 +185,7 @@ class DataCollectionLaunchConfig:
     camera_viewer: bool = True
     """Start the camera viewer pane."""
 
-    camera_host: str = "localhost"
+    camera_host: str = "192.168.123.164"
     """Camera server host (shared by data exporter and viewer)."""
 
     camera_port: int = 5555
@@ -270,6 +276,13 @@ def _configure_pico_usb_tunnels(config: DataCollectionLaunchConfig):
     )
 
     if config.pico_vision:
+        command_spec = f"tcp:{config.pico_vision_command_port}"
+        subprocess.run(["adb", "reverse", "--remove", command_spec], capture_output=True)
+        _run_checked(
+            ["adb", "reverse", command_spec, command_spec],
+            "ERROR: Failed to configure adb reverse for PICO Remote Vision commands.",
+        )
+
         stream_spec = f"tcp:{config.pico_vision_port}"
         subprocess.run(["adb", "forward", "--remove", stream_spec], capture_output=True)
         _run_checked(
@@ -409,6 +422,7 @@ def main(config: DataCollectionLaunchConfig):
     if config.pico_vision:
         print(
             f"  PICO stream:     {config.pico_vision_camera_key} -> "
+            f"{config.pico_vision_source} "
             f"{pico_stream_ip}:{config.pico_vision_port}"
         )
     print(f"  PC Service IP:   {pc_service_ip_hint}")
@@ -455,7 +469,9 @@ def main(config: DataCollectionLaunchConfig):
             f"--camera-port {config.camera_port} "
             f"--camera-key {config.pico_vision_camera_key} "
             f"--pico-ip {pico_stream_ip} "
-            f"--pico-port {config.pico_vision_port}"
+            f"--pico-port {config.pico_vision_port} "
+            f"--vision-source {config.pico_vision_source} "
+            f"--pico-command-port {config.pico_vision_command_port}"
         )
         if config.pico_vision_preview:
             pico_vision_cmd += " --show-preview"

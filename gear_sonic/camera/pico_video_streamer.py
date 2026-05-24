@@ -39,6 +39,26 @@ def letterbox_bgr(
     return canvas
 
 
+def stereo_pair_bgr(
+    img_bgr: np.ndarray,
+    out_w: int,
+    out_h: int,
+    letterbox: bool = True,
+) -> np.ndarray:
+    """Duplicate a mono BGR frame into side-by-side left/right eye views."""
+    left_w = max(1, out_w // 2)
+    right_w = max(1, out_w - left_w)
+
+    if letterbox:
+        left = letterbox_bgr(img_bgr, left_w, out_h)
+        right = letterbox_bgr(img_bgr, right_w, out_h)
+    else:
+        left = cv2.resize(img_bgr, (left_w, out_h), interpolation=cv2.INTER_LINEAR)
+        right = cv2.resize(img_bgr, (right_w, out_h), interpolation=cv2.INTER_LINEAR)
+
+    return np.ascontiguousarray(np.concatenate([left, right], axis=1))
+
+
 @dataclass
 class PicoVideoStreamerConfig:
     """Configuration for the PICO H.264 stream."""
@@ -48,10 +68,13 @@ class PicoVideoStreamerConfig:
     width: int = 1280
     height: int = 720
     fps: int = 30
+    bitrate_kbps: int = 4000
     reconnect_interval_s: float = 1.0
     connect_timeout_s: float = 2.0
     letterbox: bool = True
     """If True, preserve source aspect ratio inside width×height (black bars). If False, stretch."""
+    mono_to_stereo: bool = False
+    """If True, duplicate each mono source frame into side-by-side left/right eye views."""
 
 
 class PicoVideoStreamer:
@@ -89,7 +112,9 @@ class PicoVideoStreamer:
         print(
             "[PicoVideoStreamer] started "
             f"target={self.config.pico_ip}:{self.config.pico_port} "
-            f"{self.config.width}x{self.config.height}@{self.config.fps}"
+            f"{self.config.width}x{self.config.height}@{self.config.fps} "
+            f"bitrate={self.config.bitrate_kbps}kbps "
+            f"mono_to_stereo={self.config.mono_to_stereo}"
         )
 
     def submit_frame_bgr(self, frame_bgr: np.ndarray):
@@ -161,7 +186,8 @@ class PicoVideoStreamer:
             f"video/x-raw,format=BGR,width={self.config.width},height={self.config.height},"
             f"framerate={self.config.fps}/1 ! "
             "videoconvert ! "
-            "x264enc tune=zerolatency speed-preset=ultrafast key-int-max=15 ! "
+            "x264enc tune=zerolatency speed-preset=ultrafast "
+            f"key-int-max=15 bitrate={self.config.bitrate_kbps} ! "
             "video/x-h264,profile=baseline ! "
             "h264parse config-interval=-1 ! "
             "video/x-h264,stream-format=byte-stream,alignment=au ! "
@@ -209,7 +235,14 @@ class PicoVideoStreamer:
                     self._latest_frame_bgr = None
 
             if frame is not None and self._appsrc is not None:
-                if frame.shape[1] != self.config.width or frame.shape[0] != self.config.height:
+                if self.config.mono_to_stereo:
+                    frame = stereo_pair_bgr(
+                        frame,
+                        self.config.width,
+                        self.config.height,
+                        letterbox=self.config.letterbox,
+                    )
+                elif frame.shape[1] != self.config.width or frame.shape[0] != self.config.height:
                     if self.config.letterbox:
                         frame = letterbox_bgr(
                             frame, self.config.width, self.config.height

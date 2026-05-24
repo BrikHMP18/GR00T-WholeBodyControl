@@ -1,5 +1,7 @@
 # Real Robot Data Recording Checklist
 
+Ultima modificacion: 2026-05-24 15:36:59 -05 -0500
+
 Short checklist for recording VLA demos on the real G1. For **PICO Remote Vision** (live camera in the headset while you record), see [below](#pico-remote-vision); the full walkthrough is [`docs/source/tutorials/pico_vision.md`](../docs/source/tutorials/pico_vision.md).
 
 ## 1. Connect
@@ -37,9 +39,11 @@ Start the camera server. Replace `0` with the working index:
 ```bash
 python -m gear_sonic.camera.composed_camera \
   --ego-view-camera usb \
-  --ego-view-device-id 8 \
+  --ego-view-device-id 0 \
   --right-wrist-camera usb \
-  --right-wrist-device-id 6 \
+  --right-wrist-device-id 4 \
+  --left-wrist-camera usb \
+  --left-wrist-device-id 2 \
   --port 5555
 ```
 

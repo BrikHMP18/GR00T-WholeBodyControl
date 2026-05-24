@@ -1,133 +1,113 @@
-# Real Robot Data Recording With PICO USB
+# Real Robot Data Recording Checklist With PICO USB
 
-Ultima modificacion: 2026-05-23 23:31:20 -05 -0500
+Ultima modificacion: 2026-05-24 15:36:59 -05 -0500
 
-Esta guia deja listo el flujo para probar en robot real con el PICO conectado a
-la laptop por USB/ADB. El flujo real todavia no fue probado en el robot; queda
-como smoke test para la siguiente sesion.
+Short checklist for recording VLA demos on the real G1 while the PICO is
+connected to the laptop by USB/ADB. The robot camera server is expected at
+`192.168.123.164:5555`; inside the PICO app, use `127.0.0.1` because the
+launcher creates the USB tunnels.
 
-## Topologia
+## 1. Connect
 
-```text
-PICO XRoboToolkit
-  -> USB-C / ADB
-  -> laptop: XRoboToolkit PC Service + pico_manager_thread_server.py
-
-Robot / Unitree computer
-  -> camera server con ego_view y opcional left_wrist/right_wrist
-  -> ethernet
-  -> laptop: data exporter + camera viewer + PICO video bridge
-
-Laptop
-  -> launch_data_collection.py
-  -> C++ deploy real
-  -> PICO manager
-  -> data exporter
-  -> camera viewer
-```
-
-La IP del robot solo se usa en la laptop con `--camera-host <ROBOT_IP>`.
-Dentro del PICO, para este flujo USB, usa `127.0.0.1`.
-
-## Antes De Probar
-
-En el robot, levanta el camera server. Ejemplo con solo camara de cabeza/top:
+On the laptop, connect Ethernet to the robot network and verify the robot:
 
 ```bash
-cd ~/NONHUMAN/GR00T-WholeBodyControl
-source .venv_camera/bin/activate
-
-python -m gear_sonic.camera.composed_camera \
-  --ego-view-camera usb \
-  --ego-view-device-id <HEAD_CAMERA_ID> \
-  --port 5555
+ip -4 addr show enp3s0
+ping -c 1 192.168.123.164
 ```
 
-Ejemplo con cabeza/top + ambas wrist cameras:
+SSH into the robot:
 
 ```bash
-python -m gear_sonic.camera.composed_camera \
-  --ego-view-camera usb \
-  --ego-view-device-id <HEAD_CAMERA_ID> \
-  --left-wrist-camera usb \
-  --left-wrist-device-id <LEFT_WRIST_CAMERA_ID> \
-  --right-wrist-camera usb \
-  --right-wrist-device-id <RIGHT_WRIST_CAMERA_ID> \
-  --port 5555
+ssh unitree@192.168.123.164
 ```
 
-En la laptop, verifica que ves el PICO por USB:
+Connect the PICO by USB-C and verify ADB:
 
 ```bash
 adb devices
 ```
 
-Y verifica que la laptop ve la camara del robot:
+Expected: one PICO device listed as `device`.
+
+## 2. Start Camera Server on Robot
+
+On the robot:
+
+```bash
+cd ~/NONHUMAN/GR00T-WholeBodyControl
+source .venv_camera/bin/activate
+```
+
+Find the USB camera indices:
+
+```bash
+while true; do clear; echo "=== $(date) ==="; v4l2-ctl --list-devices; sleep 2; done
+```
+
+Start the camera server. Adjust device IDs if the indices changed:
+
+```bash
+python -m gear_sonic.camera.composed_camera \
+  --ego-view-camera usb \
+  --ego-view-device-id 0 \
+  --right-wrist-camera usb \
+  --right-wrist-device-id 4 \
+  --left-wrist-camera usb \
+  --left-wrist-device-id 2 \
+  --port 5555
+```
+
+If port `5555` is busy:
+
+```bash
+ss -ltnp | grep 5555
+kill <PID>
+```
+
+## 3. Verify Camera on Laptop
+
+On the laptop:
 
 ```bash
 cd ~/NONHUMAN/GR00T-WholeBodyControl
 source .venv_data_collection/bin/activate
 
 python gear_sonic/scripts/run_camera_viewer.py \
-  --camera-host <ROBOT_IP> \
+  --camera-host 192.168.123.164 \
   --camera-port 5555
 ```
 
-## Que Configura El Launcher
+Viewer keys:
 
-Con `--pico-transport usb`, el launcher configura:
-
-```bash
-adb reverse tcp:63901 tcp:63901
+```text
+Q = quit
+R = record raw camera video
 ```
 
-Eso permite que XRoboToolkit en el PICO use:
+## 4. Configure XRoboToolkit on PICO
+
+For tracking / PC Service:
 
 ```text
 PC Service: 127.0.0.1
 ```
 
-Si ademas usas `--pico-vision`, el launcher configura:
-
-```bash
-adb forward tcp:12345 tcp:12345
-```
-
-Entonces Remote Vision en el PICO debe usar:
+For Remote Vision, use the large PICO4U view:
 
 ```text
-Remote Vision: ZEDMINI
+Remote Vision: PICO4U
 Camera/source IP: 127.0.0.1
+command port: 13579
 stream port: 12345
 ```
 
-No uses la IP del robot dentro del PICO. El robot publica camaras hacia la
-laptop por ethernet; la laptop reenvia la camara de cabeza/top al PICO por USB.
+Use `PICO4U` for the large viewer. `ZEDMINI` is the rectangular stereo viewer
+and is not the default for this USB flow.
 
-## Comando 1: Solo Cabeza/Top
+## 5. Record Data With PICO USB
 
-Este comando graba solo `ego_view` en el dataset y tambien muestra solo
-`ego_view` en el PICO:
-
-```bash
-cd ~/NONHUMAN/GR00T-WholeBodyControl
-tmux kill-session -t sonic_data_collection 2>/dev/null || true
-
-python gear_sonic/scripts/launch_data_collection.py \
-  --pico-transport usb \
-  --pico-vision \
-  --pico-vision-camera-key ego_view \
-  --camera-host <ROBOT_IP> \
-  --camera-port 5555 \
-  --wrist-cameras none \
-  --task-prompt "real shelf manipulation" \
-  --dataset-name "real_usb_head_episode"
-```
-
-## Comando 2: Dataset Con Wrists, PICO Solo Cabeza/Top
-
-Este comando graba `ego_view`, `left_wrist` y `right_wrist` en el dataset, pero
-el PICO sigue mostrando solo `ego_view`:
+On the laptop:
 
 ```bash
 cd ~/NONHUMAN/GR00T-WholeBodyControl
@@ -137,39 +117,112 @@ python gear_sonic/scripts/launch_data_collection.py \
   --pico-transport usb \
   --pico-vision \
   --pico-vision-camera-key ego_view \
-  --camera-host <ROBOT_IP> \
+  --camera-host 192.168.123.164 \
   --camera-port 5555 \
   --wrist-cameras both \
   --task-prompt "real shelf manipulation" \
   --dataset-name "real_usb_head_wrist_episode"
 ```
 
-Si solo tienes una wrist camera publicada por el robot, cambia `--wrist-cameras
-both` por `--wrist-cameras left` o `--wrist-cameras right`.
+This records `ego_view`, `left_wrist`, and `right_wrist` in the dataset while
+the PICO shows only `ego_view`.
 
-## Checks Durante La Prueba
+If you only want the head camera in the dataset:
 
-Despues de lanzar el comando, en otra terminal puedes revisar:
+```bash
+python gear_sonic/scripts/launch_data_collection.py \
+  --pico-transport usb \
+  --pico-vision \
+  --pico-vision-camera-key ego_view \
+  --camera-host 192.168.123.164 \
+  --camera-port 5555 \
+  --wrist-cameras none \
+  --task-prompt "real shelf manipulation" \
+  --dataset-name "real_usb_head_episode"
+```
+
+If only one wrist camera is published by the robot, use `--wrist-cameras left`
+or `--wrist-cameras right`.
+
+In tmux, confirm the deploy pane only when the robot is safe.
+
+## 6. Check USB Tunnels
+
+The launcher configures these automatically:
+
+```text
+adb reverse tcp:63901 tcp:63901
+adb reverse tcp:13579 tcp:13579
+adb forward tcp:12345 tcp:12345
+```
+
+Verify them from another terminal:
 
 ```bash
 adb reverse --list
 adb forward --list
 ```
 
-Esperado con `--pico-vision`:
+Expected:
 
 ```text
 tcp:63901 tcp:63901
+tcp:13579 tcp:13579
 tcp:12345 tcp:12345
 ```
 
-En XRoboToolkit:
+## 7. Troubleshooting
 
-```text
-Network / PC Service: WORKING
-Remote Vision: debe mostrar la camara ego_view de cabeza/top
+If the PICO has tracking but no video, first verify the laptop can see the robot
+camera:
+
+```bash
+python gear_sonic/scripts/run_camera_viewer.py \
+  --camera-host 192.168.123.164 \
+  --camera-port 5555
 ```
 
-Si no hay video en el PICO, primero verifica que el camera viewer en la laptop
-si reciba imagen desde `<ROBOT_IP>:5555`. Si el viewer no recibe imagen, el
-problema esta en el camera server, la IP del robot, ethernet o las camaras.
+If the viewer fails, the issue is on the robot camera server, Ethernet, camera
+indices, or port `5555`.
+
+If the viewer works but the PICO does not show video, verify:
+
+```text
+Remote Vision: PICO4U
+Camera/source IP: 127.0.0.1
+command port: 13579
+stream port: 12345
+```
+
+If the stream is still stale, restart only the PICO video pane or relaunch the
+tmux session:
+
+```bash
+tmux kill-session -t sonic_data_collection
+```
+
+## 8. Finish
+
+Stop/save the current episode:
+
+```text
+Left Grip + A
+```
+
+Discard the current episode:
+
+```text
+Left Grip + B
+```
+
+Kill tmux session if needed:
+
+```bash
+tmux kill-session -t sonic_data_collection
+```
+
+Datasets are saved under:
+
+```text
+outputs/<dataset-name>/
+```
