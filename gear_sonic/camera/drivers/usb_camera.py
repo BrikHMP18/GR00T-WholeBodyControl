@@ -22,7 +22,7 @@ from gear_sonic.camera.sensor_server import CameraMountPosition
 class USBCameraConfig:
     """Configuration for generic USB camera."""
 
-    image_dim: tuple = (640, 480)
+    image_dim: tuple = (320, 240)
     fps: int = 30
     device_index: int = 0
 
