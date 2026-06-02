@@ -51,6 +51,8 @@ source .venv_camera/bin/activate
 Find the USB camera indices:
 
 ```bash
+cd ~/NONHUMAN/GR00T-WholeBodyControl
+source .venv_camera/bin/activate
 while true; do clear; echo "=== $(date) ==="; v4l2-ctl --list-devices; sleep 2; done
 ```
 
@@ -60,11 +62,11 @@ Start the camera server. Adjust device IDs to match `v4l2-ctl --list-devices`
 ```bash
 python -m gear_sonic.camera.composed_camera \
   --ego-view-camera usb \
-  --ego-view-device-id 0 \
+  --ego-view-device-id 8 \
   --left-wrist-camera usb \
-  --left-wrist-device-id 2 \
+  --left-wrist-device-id 10 \
   --right-wrist-camera usb \
-  --right-wrist-device-id 4 \
+  --right-wrist-device-id 6 \
   --port 5555
 ```
 
@@ -118,17 +120,27 @@ and is not the default for this USB flow.
 ### PICO vision layouts
 
 The launcher streams robot cameras to the PICO through
-`gear_sonic/scripts/stream_camera_to_pico.py`. Two layouts are available:
+`gear_sonic/scripts/stream_camera_to_pico.py`. Three multi-camera layouts are
+available:
 
 | Layout | Flag | What the teleoperator sees |
 |---|---|---|
 | `single` (default) | `--pico-vision-layout single` | One camera only (`--pico-vision-camera-key`, usually `ego_view`) |
-| `teleop_grid` | `--pico-vision-layout teleop_grid` | Ego view in the center column plus both wrist cameras on the sides |
+| `teleop_center_stack` (recommended) | `--pico-vision-layout teleop_center_stack` | Ego on top, left/right wrist cameras side-by-side below (centered block) |
+| `teleop_grid` (legacy) | `--pico-vision-layout teleop_grid` | Ego in the center column plus wrist cameras on the sides (3×3 grid) |
 
-`teleop_grid` requires the robot camera server to publish all three keys:
-`ego_view`, `left_wrist`, and `right_wrist`.
+`teleop_center_stack` and `teleop_grid` require the robot camera server to
+publish all three keys: `ego_view`, `left_wrist`, and `right_wrist`.
 
-Grid layout (3×3, corners black):
+Center stack layout (ego same center-column width as `teleop_grid`; each wrist
+uses full `cell_w`, on a row centered below ego):
+
+```text
+      [dark] [      ego      ] [dark]
+         [dark] [ L ] [ R ] [dark]
+```
+
+Legacy grid layout (3×3, corners black):
 
 ```text
 [dark] [ego ] [dark]
@@ -140,6 +152,10 @@ Rotation (`--pico-vision-rotate`) applies **only to `ego_view`**. Wrist cameras
 are not rotated. This correction affects only the PICO Remote Vision stream; the
 dataset keeps the original camera images.
 
+Vertical shift (`--pico-vision-y-offset N`) moves letterboxed grid panels down by
+`N` pixels in the headset view (for example `30`). Ignored with
+`--pico-vision-stretch`. Does not change recorded dataset images.
+
 ## 5. Record Data With PICO USB
 
 On the laptop (no need to activate a venv manually — the launcher re-execs into
@@ -147,24 +163,32 @@ On the laptop (no need to activate a venv manually — the launcher re-execs int
 you):
 
 ```bash
+BASKET="bottom left"   # bottom right | bottom center | top left | ...
+TASK_PROMPT="pick up the object from the ${BASKET} basket and place it to the box"
+
 cd ~/NONHUMAN/GR00T-WholeBodyControl
 tmux kill-session -t sonic_data_collection 2>/dev/null || true
 
 python gear_sonic/scripts/launch_data_collection.py \
   --pico-transport usb \
   --pico-vision \
-  --pico-vision-layout teleop_grid \
-  --pico-vision-rotate ccw90 \
+  --pico-vision-layout teleop_center_stack \
+  --pico-vision-rotate cw90 \
+  --pico-vision-y-offset 25 \
   --camera-host 192.168.123.164 \
   --camera-port 5555 \
-  --wrist-cameras both \
-  --task-prompt "push the panda and the toilet paper" \
-  --dataset-name "push_objects_session1_v2"
+  --wrist-cameras both
 ```
 
+Change `BASKET` before each run (for example `bottom right`, `bottom center`,
+`top left`). The full prompt is built automatically from that location.
+
+Tune `--pico-vision-y-offset` if the teleop view looks too high in the headset
+(start around `20`–`40`; omit the flag or use `0` for default centered letterbox).
+
 This is the recommended command for wrist teleop: it records `ego_view`,
-`left_wrist`, and `right_wrist` in the dataset and shows the teleop grid on the
-PICO (ego in the center column, wrists on the sides).
+`left_wrist`, and `right_wrist` in the dataset and shows the center stack on the
+PICO (ego on top, wrists below).
 
 `--dataset-name` is optional; omit it to auto-generate a timestamped folder under
 `outputs/`. If you change camera resolution or restart a broken session, delete
@@ -173,7 +197,7 @@ any partial dataset folder first (for example `outputs/push_objects_session1_v2/
 The launcher opens tmux session `sonic_data_collection` with:
 
 ```text
-Window pico_vision     -> stream_camera_to_pico (teleop_grid to PICO)
+Window pico_vision     -> stream_camera_to_pico (teleop_center_stack to PICO)
 Window data_collection -> deploy | teleop | data exporter | camera viewer
 ```
 
@@ -223,7 +247,7 @@ python gear_sonic/scripts/launch_data_collection.py \
 
 If only one wrist camera is published by the robot, use `--wrist-cameras left`
 or `--wrist-cameras right`. In that case use `--pico-vision-layout single`
-because `teleop_grid` requires both wrists.
+because `teleop_center_stack` and `teleop_grid` require both wrists.
 
 You can also run the stream standalone for debugging. With PICO over USB, set up
 ADB tunnels first, then use `127.0.0.1` as the PICO IP:
@@ -235,7 +259,7 @@ adb forward tcp:12345 tcp:12345
 python -m gear_sonic.scripts.stream_camera_to_pico \
   --camera-host 192.168.123.164 \
   --camera-port 5555 \
-  --layout teleop_grid \
+  --layout teleop_center_stack \
   --rotate ccw90 \
   --pico-ip 127.0.0.1 \
   --show-preview
@@ -314,9 +338,13 @@ the robot clock is ahead of the laptop clock. They do not affect streaming.
 If the PICO video is rotated because the physical ego camera is mounted
 sideways, use `--pico-vision-rotate cw90`. If that is the wrong direction, try
 `--pico-vision-rotate ccw90`. Wrist cameras are never rotated in
-`teleop_grid` mode.
+`teleop_center_stack` or `teleop_grid` mode.
 
-If `teleop_grid` fails at startup with missing camera keys, verify the robot
+If the teleop view looks too high in the headset, add
+`--pico-vision-y-offset 30` (tune in steps of 10–20). This only affects the
+PICO stream, not the dataset.
+
+If `teleop_center_stack` or `teleop_grid` fails at startup with missing camera keys, verify the robot
 camera server publishes `ego_view`, `left_wrist`, and `right_wrist` (see
 section 2) and that `run_camera_viewer.py` shows all three streams.
 

@@ -46,8 +46,9 @@ VISION_SOURCE_PROFILES = {
     },
 }
 ROTATION_CHOICES = ("none", "cw90", "ccw90", "180")
-LAYOUT_CHOICES = ("single", "teleop_grid")
+LAYOUT_CHOICES = ("single", "teleop_grid", "teleop_center_stack")
 TELEOP_GRID_CAMERA_KEYS = ("ego_view", "left_wrist", "right_wrist")
+TELEOP_MULTI_CAMERA_LAYOUTS = ("teleop_grid", "teleop_center_stack")
 
 
 @dataclass
@@ -102,8 +103,11 @@ class StreamCameraToPicoConfig:
     rotate: str = "none"
     """Rotate ego_view before streaming: none, cw90, ccw90, or 180."""
 
+    vision_y_offset: int = 0
+    """Shift letterboxed PICO stream content downward by N pixels (default: 0)."""
+
     layout: str = "single"
-    """Stream layout: single camera (--camera-key) or teleop_grid (ego + both wrists)."""
+    """Stream layout: single, teleop_grid, or teleop_center_stack (ego + both wrists)."""
 
     show_preview: bool = False
     """Show a local OpenCV preview window for debugging."""
@@ -215,6 +219,7 @@ def _build_preview_frame(
     height: int,
     mono_to_stereo: bool,
     stretch: bool,
+    vision_y_offset: int = 0,
 ):
     import cv2
 
@@ -226,10 +231,11 @@ def _build_preview_frame(
             width,
             height,
             letterbox=not stretch,
+            y_offset=vision_y_offset,
         )
     if stretch:
         return cv2.resize(frame_bgr, (width, height))
-    return letterbox_bgr(frame_bgr, width, height)
+    return letterbox_bgr(frame_bgr, width, height, y_offset=vision_y_offset)
 
 
 def _build_stream_frame_rgb(
@@ -240,10 +246,13 @@ def _build_stream_frame_rgb(
 ):
     import cv2
 
-    from gear_sonic.camera.pico_video_streamer import compose_teleop_grid_bgr
+    from gear_sonic.camera.pico_video_streamer import (
+        compose_teleop_center_stack_bgr,
+        compose_teleop_grid_bgr,
+    )
 
     images = message["images"]
-    if config.layout == "teleop_grid":
+    if config.layout in TELEOP_MULTI_CAMERA_LAYOUTS:
         ego_rgb = images.get("ego_view")
         if ego_rgb is None:
             return None
@@ -257,13 +266,19 @@ def _build_stream_frame_rgb(
             cv2.cvtColor(right_rgb, cv2.COLOR_RGB2BGR) if right_rgb is not None else None
         )
         ego_bgr = cv2.cvtColor(ego_rgb, cv2.COLOR_RGB2BGR)
-        return compose_teleop_grid_bgr(
+        compose_fn = (
+            compose_teleop_center_stack_bgr
+            if config.layout == "teleop_center_stack"
+            else compose_teleop_grid_bgr
+        )
+        return compose_fn(
             ego_bgr,
             left_bgr,
             right_bgr,
             mono_w,
             mono_h,
             letterbox=not config.stretch,
+            y_offset=config.vision_y_offset,
         )
 
     img_rgb = images.get(config.camera_key)
@@ -444,6 +459,7 @@ def main(config: StreamCameraToPicoConfig):
             fps=fps,
             bitrate_kbps=bitrate_kbps,
             letterbox=not config.stretch,
+            letterbox_y_offset=config.vision_y_offset,
             mono_to_stereo=mono_to_stereo,
         )
     )
@@ -468,7 +484,7 @@ def main(config: StreamCameraToPicoConfig):
         if config.list_keys_only:
             return
 
-        if config.layout == "teleop_grid":
+        if config.layout in TELEOP_MULTI_CAMERA_LAYOUTS:
             missing_keys = [
                 key
                 for key in TELEOP_GRID_CAMERA_KEYS
@@ -476,8 +492,9 @@ def main(config: StreamCameraToPicoConfig):
             ]
             if missing_keys:
                 raise KeyError(
-                    "teleop_grid layout requires ego_view, left_wrist, and right_wrist. "
-                    f"Missing: {missing_keys}. Available keys: {available_keys}"
+                    f"{config.layout} layout requires ego_view, left_wrist, and "
+                    f"right_wrist. Missing: {missing_keys}. "
+                    f"Available keys: {available_keys}"
                 )
         elif config.camera_key not in first_message["images"]:
             raise KeyError(
@@ -492,16 +509,15 @@ def main(config: StreamCameraToPicoConfig):
             f"{stream_settings['label']}, press Listen, use camera/source IP "
             "127.0.0.1 for USB, then keep this process running."
         )
-        layout_desc = (
-            "teleop_grid(ego_view+left_wrist+right_wrist)"
-            if config.layout == "teleop_grid"
-            else config.camera_key
-        )
+        layout_desc = {
+            "teleop_grid": "teleop_grid(ego_view+left_wrist+right_wrist)",
+            "teleop_center_stack": "teleop_center_stack(ego above wrists)",
+        }.get(config.layout, config.camera_key)
         print(
             "[stream_camera_to_pico] output "
             f"{width}x{height}@{fps} bitrate={bitrate_kbps}kbps "
             f"mono_to_stereo={mono_to_stereo} layout={layout_desc} "
-            f"rotate={config.rotate}"
+            f"rotate={config.rotate} y_offset={config.vision_y_offset}"
         )
         streamer.start()
 
@@ -525,6 +541,7 @@ def main(config: StreamCameraToPicoConfig):
                             height,
                             mono_to_stereo,
                             config.stretch,
+                            config.vision_y_offset,
                         )
                         cv2.imshow("PICO camera stream preview", preview)
                         if cv2.waitKey(1) & 0xFF == ord("q"):
@@ -595,8 +612,9 @@ def parse_args() -> StreamCameraToPicoConfig:
         choices=LAYOUT_CHOICES,
         default="single",
         help=(
-            "Stream layout. single uses --camera-key only; teleop_grid composes "
-            "ego_view in the center column with left/right wrist cameras on the sides."
+            "Stream layout. single uses --camera-key only; teleop_grid uses a 3x3 "
+            "grid; teleop_center_stack places ego above left/right wrist cameras "
+            "as a centered block."
         ),
     )
     parser.add_argument(
@@ -604,6 +622,15 @@ def parse_args() -> StreamCameraToPicoConfig:
         choices=ROTATION_CHOICES,
         default="none",
         help="Rotate ego_view before streaming to PICO (ignored for wrist cameras).",
+    )
+    parser.add_argument(
+        "--vision-y-offset",
+        type=int,
+        default=0,
+        help=(
+            "Shift letterboxed PICO stream content downward by N pixels. "
+            "Ignored when --stretch is set. Does not affect recorded dataset images."
+        ),
     )
     parser.add_argument(
         "--stretch",

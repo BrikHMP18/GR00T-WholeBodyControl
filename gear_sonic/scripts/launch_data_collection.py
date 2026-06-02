@@ -159,8 +159,11 @@ class DataCollectionLaunchConfig:
     pico_vision_rotate: Literal["none", "cw90", "ccw90", "180"] = "none"
     """Rotate ego_view before streaming to PICO."""
 
-    pico_vision_layout: Literal["single", "teleop_grid"] = "single"
-    """PICO stream layout: single camera or teleop_grid (ego + both wrists)."""
+    pico_vision_y_offset: int = 0
+    """Shift letterboxed PICO Remote Vision content downward by N pixels."""
+
+    pico_vision_layout: Literal["single", "teleop_grid", "teleop_center_stack"] = "single"
+    """PICO stream layout: single, teleop_grid, or teleop_center_stack (ego above wrists)."""
 
     pico_vision_preview: bool = False
     """Show a local OpenCV preview for the PICO vision stream."""
@@ -432,6 +435,11 @@ def main(config: DataCollectionLaunchConfig):
             f"{config.pico_vision_source} "
             f"{pico_stream_ip}:{config.pico_vision_port} "
             f"rotate={config.pico_vision_rotate}"
+            + (
+                f" y_offset={config.pico_vision_y_offset}"
+                if config.pico_vision_y_offset
+                else ""
+            )
         )
     print(f"  PC Service IP:   {pc_service_ip_hint}")
     print("=" * 60)
@@ -483,6 +491,8 @@ def main(config: DataCollectionLaunchConfig):
             f"--layout {config.pico_vision_layout} "
             f"--rotate {config.pico_vision_rotate}"
         )
+        if config.pico_vision_y_offset:
+            pico_vision_cmd += f" --vision-y-offset {config.pico_vision_y_offset}"
         if config.pico_vision_preview:
             pico_vision_cmd += " --show-preview"
         if config.pico_vision_stretch:
@@ -597,6 +607,8 @@ def main(config: DataCollectionLaunchConfig):
         print("  Window 'pico_vision':")
         if config.pico_vision_layout == "teleop_grid":
             stream_desc = "ego_view + left_wrist + right_wrist grid"
+        elif config.pico_vision_layout == "teleop_center_stack":
+            stream_desc = "ego_view above left/right wrist cameras"
         else:
             stream_desc = f"{config.pico_vision_camera_key} camera stream"
         print(

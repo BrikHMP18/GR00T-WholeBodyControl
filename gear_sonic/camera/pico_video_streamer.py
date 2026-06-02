@@ -25,10 +25,14 @@ def letterbox_bgr(
     out_w: int,
     out_h: int,
     fill: tuple[int, int, int] = (0, 0, 0),
+    y_offset: int = 0,
 ) -> np.ndarray:
-    """Scale image to fit inside (out_w, out_h) preserving aspect ratio; pad with ``fill``."""
+    """Scale image to fit inside (out_w, out_h) preserving aspect ratio; pad with ``fill``.
+
+    ``y_offset`` shifts the scaled image downward by N pixels (letterbox only).
+    """
     h, w = img_bgr.shape[:2]
-    if w == out_w and h == out_h:
+    if w == out_w and h == out_h and y_offset == 0:
         return img_bgr
     scale = min(out_w / w, out_h / h)
     nw = max(1, int(round(w * scale)))
@@ -36,9 +40,90 @@ def letterbox_bgr(
     resized = cv2.resize(img_bgr, (nw, nh), interpolation=cv2.INTER_LINEAR)
     canvas = np.full((out_h, out_w, 3), fill, dtype=np.uint8)
     x0 = (out_w - nw) // 2
-    y0 = (out_h - nh) // 2
+    y0 = (out_h - nh) // 2 + y_offset
+    y0 = max(0, min(y0, out_h - nh))
     canvas[y0 : y0 + nh, x0 : x0 + nw] = resized
-    return canvas
+    return np.ascontiguousarray(canvas)
+
+
+def _panel_bgr(
+    img_bgr: np.ndarray | None,
+    panel_w: int,
+    panel_h: int,
+    letterbox: bool,
+    y_offset: int,
+) -> np.ndarray:
+    """Render one camera into a fixed-size BGR panel."""
+    if img_bgr is None:
+        return np.zeros((panel_h, panel_w, 3), dtype=np.uint8)
+    if letterbox:
+        return letterbox_bgr(img_bgr, panel_w, panel_h, y_offset=y_offset)
+    return cv2.resize(img_bgr, (panel_w, panel_h), interpolation=cv2.INTER_LINEAR)
+
+
+def _teleop_stack_geometry(out_w: int, out_h: int) -> dict[str, int]:
+    """Panel sizes shared by teleop_grid and teleop_center_stack."""
+    cell_w = max(1, out_w // 3)
+    cell_h = max(1, out_h // 3)
+    center_w = max(1, out_w - 2 * cell_w)
+    return {
+        "cell_w": cell_w,
+        "cell_h": cell_h,
+        "center_w": center_w,
+        "ego_h": out_h - cell_h,
+        "wrist_h": cell_h,
+        "wrist_row_w": 2 * cell_w,
+    }
+
+
+def compose_teleop_center_stack_bgr(
+    ego_bgr: np.ndarray | None,
+    left_wrist_bgr: np.ndarray | None,
+    right_wrist_bgr: np.ndarray | None,
+    out_w: int,
+    out_h: int,
+    letterbox: bool = True,
+    y_offset: int = 0,
+) -> np.ndarray:
+    """Compose ego above left/right wrist cameras, centered as one block.
+
+    Layout (ego column width matches ``teleop_grid``; wrists use full ``cell_w`` each):
+
+        [dark] [      ego (center_w × ego_h)      ] [dark]
+           [dark] [ L (cell_w) ] [ R (cell_w) ] [dark]
+
+    Wrist panels are the same size as in ``teleop_grid`` and sit on a wider row
+    centered under the ego (they may extend slightly past the ego column).
+    """
+    canvas = np.zeros((out_h, out_w, 3), dtype=np.uint8)
+    geom = _teleop_stack_geometry(out_w, out_h)
+    cell_w = geom["cell_w"]
+    center_w = geom["center_w"]
+    ego_h = geom["ego_h"]
+    wrist_h = geom["wrist_h"]
+    wrist_row_w = geom["wrist_row_w"]
+
+    block_h = ego_h + wrist_h
+    ego_start_x = (out_w - center_w) // 2
+    wrist_start_x = (out_w - wrist_row_w) // 2
+    start_y = max(0, (out_h - block_h) // 2)
+    wrist_y = start_y + ego_h
+
+    ego_panel = _panel_bgr(ego_bgr, center_w, ego_h, letterbox, y_offset)
+    canvas[start_y : start_y + ego_h, ego_start_x : ego_start_x + center_w] = ego_panel
+
+    left_panel = _panel_bgr(left_wrist_bgr, cell_w, wrist_h, letterbox, y_offset)
+    canvas[wrist_y : wrist_y + wrist_h, wrist_start_x : wrist_start_x + cell_w] = (
+        left_panel
+    )
+
+    right_panel = _panel_bgr(right_wrist_bgr, cell_w, wrist_h, letterbox, y_offset)
+    canvas[
+        wrist_y : wrist_y + wrist_h,
+        wrist_start_x + cell_w : wrist_start_x + wrist_row_w,
+    ] = right_panel
+
+    return np.ascontiguousarray(canvas)
 
 
 def compose_teleop_grid_bgr(
@@ -48,6 +133,7 @@ def compose_teleop_grid_bgr(
     out_w: int,
     out_h: int,
     letterbox: bool = True,
+    y_offset: int = 0,
 ) -> np.ndarray:
     """Compose ego + wrist cameras into a 3x3 teleop grid.
 
@@ -61,37 +147,23 @@ def compose_teleop_grid_bgr(
     Corner cells stay black. Only the middle-row side cells show wrist cameras.
     """
     canvas = np.zeros((out_h, out_w, 3), dtype=np.uint8)
-    cell_w = max(1, out_w // 3)
-    cell_h = max(1, out_h // 3)
+    geom = _teleop_stack_geometry(out_w, out_h)
+    cell_w = geom["cell_w"]
+    cell_h = geom["cell_h"]
+    center_w = geom["center_w"]
     center_x = cell_w
-    center_w = max(1, out_w - 2 * cell_w)
 
     if ego_bgr is not None:
-        if letterbox:
-            ego_panel = letterbox_bgr(ego_bgr, center_w, out_h)
-        else:
-            ego_panel = cv2.resize(
-                ego_bgr, (center_w, out_h), interpolation=cv2.INTER_LINEAR
-            )
+        ego_panel = _panel_bgr(ego_bgr, center_w, out_h, letterbox, y_offset)
         canvas[:, center_x : center_x + center_w] = ego_panel
 
     row_y = cell_h
     if left_wrist_bgr is not None:
-        if letterbox:
-            left_panel = letterbox_bgr(left_wrist_bgr, cell_w, cell_h)
-        else:
-            left_panel = cv2.resize(
-                left_wrist_bgr, (cell_w, cell_h), interpolation=cv2.INTER_LINEAR
-            )
+        left_panel = _panel_bgr(left_wrist_bgr, cell_w, cell_h, letterbox, y_offset)
         canvas[row_y : row_y + cell_h, 0:cell_w] = left_panel
 
     if right_wrist_bgr is not None:
-        if letterbox:
-            right_panel = letterbox_bgr(right_wrist_bgr, cell_w, cell_h)
-        else:
-            right_panel = cv2.resize(
-                right_wrist_bgr, cell_w, cell_h, interpolation=cv2.INTER_LINEAR
-            )
+        right_panel = _panel_bgr(right_wrist_bgr, cell_w, cell_h, letterbox, y_offset)
         canvas[row_y : row_y + cell_h, out_w - cell_w : out_w] = right_panel
 
     return np.ascontiguousarray(canvas)
@@ -102,14 +174,15 @@ def stereo_pair_bgr(
     out_w: int,
     out_h: int,
     letterbox: bool = True,
+    y_offset: int = 0,
 ) -> np.ndarray:
     """Duplicate a mono BGR frame into side-by-side left/right eye views."""
     left_w = max(1, out_w // 2)
     right_w = max(1, out_w - left_w)
 
     if letterbox:
-        left = letterbox_bgr(img_bgr, left_w, out_h)
-        right = letterbox_bgr(img_bgr, right_w, out_h)
+        left = letterbox_bgr(img_bgr, left_w, out_h, y_offset=y_offset)
+        right = letterbox_bgr(img_bgr, right_w, out_h, y_offset=y_offset)
     else:
         left = cv2.resize(img_bgr, (left_w, out_h), interpolation=cv2.INTER_LINEAR)
         right = cv2.resize(img_bgr, (right_w, out_h), interpolation=cv2.INTER_LINEAR)
@@ -131,6 +204,8 @@ class PicoVideoStreamerConfig:
     connect_timeout_s: float = 2.0
     letterbox: bool = True
     """If True, preserve source aspect ratio inside width×height (black bars). If False, stretch."""
+    letterbox_y_offset: int = 0
+    """Shift letterboxed content downward by N pixels (PICO stream only)."""
     mono_to_stereo: bool = False
     """If True, duplicate each mono source frame into side-by-side left/right eye views."""
 
@@ -299,11 +374,15 @@ class PicoVideoStreamer:
                         self.config.width,
                         self.config.height,
                         letterbox=self.config.letterbox,
+                        y_offset=self.config.letterbox_y_offset,
                     )
                 elif frame.shape[1] != self.config.width or frame.shape[0] != self.config.height:
                     if self.config.letterbox:
                         frame = letterbox_bgr(
-                            frame, self.config.width, self.config.height
+                            frame,
+                            self.config.width,
+                            self.config.height,
+                            y_offset=self.config.letterbox_y_offset,
                         )
                     else:
                         frame = cv2.resize(
