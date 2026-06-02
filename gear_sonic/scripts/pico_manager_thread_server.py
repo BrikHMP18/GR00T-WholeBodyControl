@@ -504,10 +504,11 @@ def generate_finger_data(hand: str, trigger: float, grip: float) -> np.ndarray:
 
     thumb = 0
     middle = 10
+    trigger_step = np.clip(np.floor(float(trigger) * 10.0 + 0.5) / 10.0, 0.4, 1.0)
+
     # Control thumb based on shoulder button state (index 4 is thumb tip)
     fingertips[4 + thumb, 0, 3] = 1.0  # open thumb
-    if trigger > 0.5:
-        fingertips[4 + middle, 0, 3] = 1.0  # close middle
+    fingertips[4 + middle, 0, 3] = trigger_step  # close middle linearly
 
     return fingertips
 

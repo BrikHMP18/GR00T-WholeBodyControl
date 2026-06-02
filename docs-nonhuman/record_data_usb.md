@@ -46,6 +46,7 @@ On the robot:
 ```bash
 cd ~/NONHUMAN/GR00T-WholeBodyControl
 source .venv_camera/bin/activate
+ss -ltnp | grep 5555
 ```
 
 Find the USB camera indices:
@@ -53,6 +54,7 @@ Find the USB camera indices:
 ```bash
 cd ~/NONHUMAN/GR00T-WholeBodyControl
 source .venv_camera/bin/activate
+ss -ltnp | grep 5555
 while true; do clear; echo "=== $(date) ==="; v4l2-ctl --list-devices; sleep 2; done
 ```
 
@@ -183,6 +185,7 @@ python gear_sonic/scripts/launch_data_collection.py \
 To stop everything and reset the PICO USB/ADB tunnels before retrying:
 
 ```bash
+tmux kill-server
 tmux kill-session -t sonic_data_collection 2>/dev/null || true
 adb reverse --remove-all
 adb forward --remove-all
