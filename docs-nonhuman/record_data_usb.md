@@ -1,6 +1,6 @@
 # Real Robot Data Recording Checklist With PICO USB
 
-Ultima modificacion: 2026-05-24
+Ultima modificacion: 2026-06-02 01:52:17 -05 -0500
 
 Short checklist for recording VLA demos on the real G1 while the PICO is
 connected to the laptop by USB/ADB. The robot camera server is expected at
@@ -179,6 +179,20 @@ python gear_sonic/scripts/launch_data_collection.py \
   --camera-port 5555 \
   --wrist-cameras both
 ```
+
+To stop everything and reset the PICO USB/ADB tunnels before retrying:
+
+```bash
+tmux kill-session -t sonic_data_collection 2>/dev/null || true
+adb reverse --remove-all
+adb forward --remove-all
+adb kill-server
+adb start-server
+adb devices
+```
+
+Comment: use this after a failed launch or when ADB reports a port already in
+use.
 
 Change `BASKET` before each run (for example `bottom right`, `bottom center`,
 `top left`). The full prompt is built automatically from that location.
