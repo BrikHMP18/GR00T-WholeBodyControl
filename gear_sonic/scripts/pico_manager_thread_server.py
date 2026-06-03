@@ -488,7 +488,95 @@ def process_smpl_joints(body_pose, global_orient, transl):
     }
 
 
-def generate_finger_data(hand: str, trigger: float, grip: float) -> np.ndarray:
+DEFAULT_HAND_OPEN_FRACTION = 0.60
+WIDE_HAND_OPEN_FRACTION = 1.00
+
+
+class HandOpenModeController:
+    """Tracks per-hand open limits toggled by solo grip clicks."""
+
+    def __init__(
+        self,
+        default_open_fraction: float = DEFAULT_HAND_OPEN_FRACTION,
+        wide_open_fraction: float = WIDE_HAND_OPEN_FRACTION,
+        grip_threshold: float = 0.5,
+    ):
+        self.default_open_fraction = default_open_fraction
+        self.wide_open_fraction = wide_open_fraction
+        self.grip_threshold = grip_threshold
+        self.left_wide_open = False
+        self.right_wide_open = False
+        self._left_down = False
+        self._right_down = False
+        self._left_candidate = False
+        self._right_candidate = False
+
+    def update(
+        self,
+        left_grip: float,
+        right_grip: float,
+        a_pressed: bool,
+        b_pressed: bool,
+        x_pressed: bool,
+        y_pressed: bool,
+        left_menu_button: bool = False,
+    ) -> None:
+        left_down = left_grip > self.grip_threshold
+        right_down = right_grip > self.grip_threshold
+        face_pressed = a_pressed or b_pressed or x_pressed or y_pressed
+
+        if left_down and not self._left_down:
+            self._left_candidate = not face_pressed and not right_down and not left_menu_button
+        if right_down and not self._right_down:
+            self._right_candidate = not face_pressed and not left_down
+
+        if left_down and (face_pressed or right_down or left_menu_button):
+            self._left_candidate = False
+        if right_down and (face_pressed or left_down):
+            self._right_candidate = False
+
+        if not left_down and self._left_down:
+            if self._left_candidate:
+                self.left_wide_open = not self.left_wide_open
+                print(
+                    "[HandOpenMode] left hand max open "
+                    f"{self.left_open_fraction * 100:.0f}%"
+                )
+            self._left_candidate = False
+
+        if not right_down and self._right_down:
+            if self._right_candidate:
+                self.right_wide_open = not self.right_wide_open
+                print(
+                    "[HandOpenMode] right hand max open "
+                    f"{self.right_open_fraction * 100:.0f}%"
+                )
+            self._right_candidate = False
+
+        self._left_down = left_down
+        self._right_down = right_down
+
+    @property
+    def left_open_fraction(self) -> float:
+        return self.wide_open_fraction if self.left_wide_open else self.default_open_fraction
+
+    @property
+    def right_open_fraction(self) -> float:
+        return self.wide_open_fraction if self.right_wide_open else self.default_open_fraction
+
+    def min_close_amount(self, hand: str) -> float:
+        open_fraction = (
+            self.left_open_fraction if hand.lower() == "left" else self.right_open_fraction
+        )
+        return float(np.clip(1.0 - open_fraction, 0.0, 1.0))
+
+
+def generate_finger_data(
+    hand: str,
+    trigger: float,
+    grip: float,
+    min_close_amount: float = 1.0 - DEFAULT_HAND_OPEN_FRACTION,
+) -> np.ndarray:
     """
     Generate finger position data from Pico controller button states.
 
@@ -504,7 +592,11 @@ def generate_finger_data(hand: str, trigger: float, grip: float) -> np.ndarray:
 
     thumb = 0
     middle = 10
-    trigger_step = np.clip(np.floor(float(trigger) * 10.0 + 0.5) / 10.0, 0.4, 1.0)
+    trigger_step = np.clip(
+        np.floor(float(trigger) * 10.0 + 0.5) / 10.0,
+        min_close_amount,
+        1.0,
+    )
 
     # Control thumb based on shoulder button state (index 4 is thumb tip)
     fingertips[4 + thumb, 0, 3] = 1.0  # open thumb
@@ -694,12 +786,28 @@ def get_abxy_buttons():
 
 
 def compute_hand_joints_from_inputs(
-    left_solver, right_solver, left_trigger, left_grip, right_trigger, right_grip
+    left_solver,
+    right_solver,
+    left_trigger,
+    left_grip,
+    right_trigger,
+    right_grip,
+    hand_open_modes: HandOpenModeController | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Compute left/right hand joints using IK solvers, or zeros if unavailable."""
     if left_solver is not None and right_solver is not None:
-        left_finger_data = generate_finger_data("left", left_trigger, left_grip)
-        right_finger_data = generate_finger_data("right", right_trigger, right_grip)
+        if hand_open_modes is None:
+            left_min_close = 1.0 - DEFAULT_HAND_OPEN_FRACTION
+            right_min_close = 1.0 - DEFAULT_HAND_OPEN_FRACTION
+        else:
+            left_min_close = hand_open_modes.min_close_amount("left")
+            right_min_close = hand_open_modes.min_close_amount("right")
+        left_finger_data = generate_finger_data(
+            "left", left_trigger, left_grip, min_close_amount=left_min_close
+        )
+        right_finger_data = generate_finger_data(
+            "right", right_trigger, right_grip, min_close_amount=right_min_close
+        )
         left_hand_joints = left_solver({"position": left_finger_data})
         right_hand_joints = right_solver({"position": right_finger_data})
     else:
@@ -841,6 +949,8 @@ def _pose_stream_common(
         log_prefix=log_prefix,
     )
 
+    hand_open_modes = HandOpenModeController()
+
     streamer = PoseStreamer(
         socket=socket,
         reader=reader,
@@ -851,6 +961,7 @@ def _pose_stream_common(
         record_dir=record_dir,
         record_format=record_format,
         log_prefix=log_prefix,
+        hand_open_modes=hand_open_modes,
     )
 
     if stop_event is None:
@@ -1177,6 +1288,7 @@ class PoseStreamer:
         record_dir: str,
         record_format: str,
         log_prefix: str = "PoseLoop",
+        hand_open_modes: HandOpenModeController | None = None,
     ):
         self.socket = socket
         self.reader = reader
@@ -1184,6 +1296,7 @@ class PoseStreamer:
         self.target_fps = target_fps
         self.record_dir = record_dir
         self.log_prefix = log_prefix
+        self.hand_open_modes = hand_open_modes or HandOpenModeController()
 
         # Injected dependencies
         self.reader = reader
@@ -1287,6 +1400,15 @@ class PoseStreamer:
         # Left grip + B = toggle_data_abort
         toggle_data_collection_tmp = a_pressed and left_grip > 0.5
         toggle_data_abort_tmp = b_pressed and left_grip > 0.5
+        self.hand_open_modes.update(
+            left_grip,
+            right_grip,
+            a_pressed,
+            b_pressed,
+            x_pressed,
+            y_pressed,
+            left_menu_button=left_menu_button,
+        )
 
         # Detect rising edge
         toggle_data_collection = toggle_data_collection_tmp and not self.toggle_data_collection_last
@@ -1301,6 +1423,7 @@ class PoseStreamer:
             left_grip,
             right_trigger,
             right_grip,
+            hand_open_modes=self.hand_open_modes,
         )
         smpl_pose_np = (
             latest_data["smpl_pose"].detach().cpu().numpy()[:, :63].reshape(-1, 21, 3)[0]
@@ -1626,10 +1749,12 @@ class PlannerStreamer:
         poll_hz: int = 20,
         zmq_feedback_host: str = "localhost",
         zmq_feedback_port: int = 5557,
+        hand_open_modes: HandOpenModeController | None = None,
     ):
         self.socket = socket
         self.reader = reader
         self.three_point = three_point
+        self.hand_open_modes = hand_open_modes or HandOpenModeController()
         self.feedback_reader = FeedbackReader(
             zmq_feedback_host=zmq_feedback_host, zmq_feedback_port=zmq_feedback_port
         )
@@ -1761,6 +1886,16 @@ class PlannerStreamer:
                     left_grip,
                     right_grip,
                 ) = get_controller_inputs()
+                a_pressed, b_pressed, x_pressed, y_pressed = get_abxy_buttons()
+                self.hand_open_modes.update(
+                    left_grip,
+                    right_grip,
+                    a_pressed,
+                    b_pressed,
+                    x_pressed,
+                    y_pressed,
+                    left_menu_button=left_menu_button,
+                )
                 lh_joints, rh_joints = compute_hand_joints_from_inputs(
                     self.left_hand_ik_solver,
                     self.right_hand_ik_solver,
@@ -1768,6 +1903,7 @@ class PlannerStreamer:
                     left_grip,
                     right_trigger,
                     right_grip,
+                    hand_open_modes=self.hand_open_modes,
                 )
                 left_hand_position = lh_joints.reshape(-1).astype(np.float32).tolist()
                 right_hand_position = rh_joints.reshape(-1).astype(np.float32).tolist()
@@ -1858,6 +1994,7 @@ def run_pico_manager(
         enable_smpl_vis=enable_smpl_vis,
         log_prefix="PoseLoop",
     )
+    hand_open_modes = HandOpenModeController()
 
     pose_streamer = PoseStreamer(
         socket=socket,
@@ -1869,6 +2006,7 @@ def run_pico_manager(
         record_dir=record_dir,
         record_format=record_format,
         log_prefix="PoseLoop",
+        hand_open_modes=hand_open_modes,
     )
     planner_streamer = PlannerStreamer(
         socket=socket,
@@ -1877,6 +2015,7 @@ def run_pico_manager(
         poll_hz=20,
         zmq_feedback_host=zmq_feedback_host,
         zmq_feedback_port=zmq_feedback_port,
+        hand_open_modes=hand_open_modes,
     )
 
     # State machine diagram:

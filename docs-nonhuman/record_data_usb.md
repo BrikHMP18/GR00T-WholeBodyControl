@@ -1,6 +1,6 @@
 # Real Robot Data Recording Checklist With PICO USB
 
-Ultima modificacion: 2026-06-02 01:52:17 -05 -0500
+Ultima modificacion: 2026-06-03 03:35:52 -05 -0500
 
 Short checklist for recording VLA demos on the real G1 while the PICO is
 connected to the laptop by USB/ADB. The robot camera server is expected at
@@ -66,9 +66,9 @@ python -m gear_sonic.camera.composed_camera \
   --ego-view-camera usb \
   --ego-view-device-id 8 \
   --left-wrist-camera usb \
-  --left-wrist-device-id 10 \
+  --left-wrist-device-id 6 \
   --right-wrist-camera usb \
-  --right-wrist-device-id 6 \
+  --right-wrist-device-id 10 \
   --port 5555
 ```
 
@@ -196,6 +196,42 @@ adb devices
 
 Comment: use this after a failed launch or when ADB reports a port already in
 use.
+
+If the launcher still fails with:
+
+```text
+ERROR: Failed to configure adb reverse for PICO Remote Vision commands.
+adb: error: cannot bind listener: Address already in use
+```
+
+then port `13579` is already busy on the PICO side. Usually this means Remote
+Vision / XRoboToolkit is still open or the previous USB listener did not release.
+Close Remote Vision on the PICO, force-close XRoboToolkit if needed, unplug/replug
+USB, then run:
+
+```bash
+adb reverse --remove-all
+adb forward --remove-all
+adb devices
+```
+
+If it is still busy, reboot the PICO. As a workaround, use a different command
+port and set the same value inside XRoboToolkit Remote Vision:
+
+```bash
+python gear_sonic/scripts/launch_data_collection.py \
+  --pico-transport usb \
+  --pico-vision \
+  --pico-vision-layout teleop_center_stack \
+  --pico-vision-rotate cw90 \
+  --pico-vision-y-offset 25 \
+  --pico-vision-command-port 13580 \
+  --camera-host 192.168.123.164 \
+  --camera-port 5555 \
+  --wrist-cameras both
+```
+
+In PICO Remote Vision, use `command port: 13580` for that workaround.
 
 Change `BASKET` before each run (for example `bottom right`, `bottom center`,
 `top left`). The full prompt is built automatically from that location.
