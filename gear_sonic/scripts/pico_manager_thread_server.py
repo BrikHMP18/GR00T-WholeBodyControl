@@ -506,10 +506,16 @@ class HandOpenModeController:
         self.grip_threshold = grip_threshold
         self.left_wide_open = False
         self.right_wide_open = False
+        self.left_latched_closed = False
+        self.right_latched_closed = False
         self._left_down = False
         self._right_down = False
+        self._a_down = False
+        self._x_down = False
         self._left_candidate = False
         self._right_candidate = False
+        self._a_candidate = False
+        self._x_candidate = False
 
     def update(
         self,
@@ -524,16 +530,33 @@ class HandOpenModeController:
         left_down = left_grip > self.grip_threshold
         right_down = right_grip > self.grip_threshold
         face_pressed = a_pressed or b_pressed or x_pressed or y_pressed
+        grip_pressed = left_down or right_down
 
         if left_down and not self._left_down:
             self._left_candidate = not face_pressed and not right_down and not left_menu_button
         if right_down and not self._right_down:
             self._right_candidate = not face_pressed and not left_down
+        if a_pressed and not self._a_down:
+            self._a_candidate = not (
+                b_pressed or x_pressed or y_pressed or grip_pressed or left_menu_button
+            )
+        if x_pressed and not self._x_down:
+            self._x_candidate = not (
+                a_pressed or b_pressed or y_pressed or grip_pressed or left_menu_button
+            )
 
         if left_down and (face_pressed or right_down or left_menu_button):
             self._left_candidate = False
         if right_down and (face_pressed or left_down):
             self._right_candidate = False
+        if a_pressed and (
+            b_pressed or x_pressed or y_pressed or grip_pressed or left_menu_button
+        ):
+            self._a_candidate = False
+        if x_pressed and (
+            a_pressed or b_pressed or y_pressed or grip_pressed or left_menu_button
+        ):
+            self._x_candidate = False
 
         if not left_down and self._left_down:
             if self._left_candidate:
@@ -553,8 +576,24 @@ class HandOpenModeController:
                 )
             self._right_candidate = False
 
+        if not a_pressed and self._a_down:
+            if self._a_candidate:
+                self.right_latched_closed = not self.right_latched_closed
+                state = "closed" if self.right_latched_closed else "trigger/open-mode"
+                print(f"[HandCloseLatch] right hand {state}")
+            self._a_candidate = False
+
+        if not x_pressed and self._x_down:
+            if self._x_candidate:
+                self.left_latched_closed = not self.left_latched_closed
+                state = "closed" if self.left_latched_closed else "trigger/open-mode"
+                print(f"[HandCloseLatch] left hand {state}")
+            self._x_candidate = False
+
         self._left_down = left_down
         self._right_down = right_down
+        self._a_down = a_pressed
+        self._x_down = x_pressed
 
     @property
     def left_open_fraction(self) -> float:
@@ -799,14 +838,18 @@ def compute_hand_joints_from_inputs(
         if hand_open_modes is None:
             left_min_close = 1.0 - DEFAULT_HAND_OPEN_FRACTION
             right_min_close = 1.0 - DEFAULT_HAND_OPEN_FRACTION
+            left_trigger_for_hand = left_trigger
+            right_trigger_for_hand = right_trigger
         else:
             left_min_close = hand_open_modes.min_close_amount("left")
             right_min_close = hand_open_modes.min_close_amount("right")
+            left_trigger_for_hand = 1.0 if hand_open_modes.left_latched_closed else left_trigger
+            right_trigger_for_hand = 1.0 if hand_open_modes.right_latched_closed else right_trigger
         left_finger_data = generate_finger_data(
-            "left", left_trigger, left_grip, min_close_amount=left_min_close
+            "left", left_trigger_for_hand, left_grip, min_close_amount=left_min_close
         )
         right_finger_data = generate_finger_data(
-            "right", right_trigger, right_grip, min_close_amount=right_min_close
+            "right", right_trigger_for_hand, right_grip, min_close_amount=right_min_close
         )
         left_hand_joints = left_solver({"position": left_finger_data})
         right_hand_joints = right_solver({"position": right_finger_data})

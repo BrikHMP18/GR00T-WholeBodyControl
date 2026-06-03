@@ -1,6 +1,6 @@
 # Real Robot Data Recording Checklist With PICO USB
 
-Ultima modificacion: 2026-06-03 03:35:52 -05 -0500
+Ultima modificacion: 2026-06-03 07:37:40 -05 -0500
 
 Short checklist for recording VLA demos on the real G1 while the PICO is
 connected to the laptop by USB/ADB. The robot camera server is expected at
@@ -408,7 +408,26 @@ tmux session:
 tmux kill-session -t sonic_data_collection
 ```
 
-## 8. Finish
+## 8. PICO Controls During Recording
+
+```text
+A+X                enter/exit POSE teleop
+Trigger            close hand while held
+A                  toggle right hand latched closed / open-mode
+X                  toggle left hand latched closed / open-mode
+Left Grip          toggle left hand open-mode limit
+Right Grip         toggle right hand open-mode limit
+Left Grip + A      start episode / stop and save episode
+Left Grip + B      discard current episode
+```
+
+The open-mode limit starts at `60%`. Pressing the matching grip alone toggles
+that hand to the wide-open mode (`100%` in the current script) and pressing it
+alone again returns to `60%`. `A` and `X` only latch the hand closed when pressed
+alone; combos such as `A+X`, `Left Grip + A`, and `Left Grip + B` keep their
+teleop / recording behavior.
+
+## 9. Finish
 
 Stop/save the current episode:
 
